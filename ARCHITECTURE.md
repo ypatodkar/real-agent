@@ -1,96 +1,159 @@
-# Architecture
+# Second Unit — Architecture
 
-> A harness that ships spec-compliant short-form video.
-> Six agents, two dial-governed gates, one deterministic compositor, and a QC loop that decides when the thing is done.
-> The generated video is the output. **The pass rate is the product.**
+> An agent harness that produces short-form video and proves it meets spec.
+> Seven agents, two dial-governed gates, one deterministic compositor, and a QC loop that decides when the thing is done.
+> **The generated video is the output. The pass rate is the product.**
 
 | | |
 |---|---|
-| **Stack** | Gemini + Google Cloud Agent Builder (ADK) |
-| **Partner track** | Grafana Cloud MCP |
-| **Deadline** | September 7, 2026 |
+| **Stack** | Gemini · Imagen · Gemini TTS · ffmpeg |
+| **Partner track** | Grafana Cloud, via MCP |
+| **Budget** | $100 total credit · `$0.110` per run |
+| **Deadline** | September 7, 2026 · submitting Sep 5 |
+| **Status** | Design complete. Implementation begins Aug 7. |
 
-> **This document says *that* the agents exist and how they fit together.**
-> [AGENTS.md](AGENTS.md) says what each one *is* — contracts, triggers, locked decisions, and what's still open. When the two disagree, AGENTS.md is newer.
+**This is the single authoritative document.** It supersedes `AGENTS.md` and `architecture.html`, both of which should be removed once this has been read. `README.md` remains the short public pitch and is not a design document.
+
+**Status key:** ⬜ open · 🟡 in design · ✅ locked · 🔒 immutable by constraint
 
 ---
 
-## How to read this
+## Contents
 
-The four diagrams below are **one system drawn four ways** — like architectural drawings of a single building: floor plan, wiring, plumbing, site plan. Same building every time.
+1. [What we're building](#1--what-were-building)
+2. [Four load-bearing decisions](#2--four-load-bearing-decisions)
+3. [The pipeline](#3--the-pipeline)
+4. [The agents](#4--the-agents)
+5. [Deliberately not agents](#5--deliberately-not-agents)
+6. [Contracts between stages](#6--contracts-between-stages)
+7. [QC rules and repair routing](#7--qc-rules-and-repair-routing)
+8. [The harness](#8--the-harness)
+9. [Cost model](#9--cost-model)
+10. [Evaluation and self-improvement](#10--evaluation-and-self-improvement)
+11. [Build order](#11--build-order)
+· [Appendix A — Decision log](#appendix-a--decision-log)
+· [Appendix B — Open questions](#appendix-b--open-questions)
 
-There are seven agents in total: six make a video, one improves the other six.
+---
 
-| Diagram | What it shows | Zoom level | New agents |
-|---|---|---|---|
-| **Fig. 1** — Pipeline | One request, start to finish | The whole building | All six |
-| **Fig. 2** — Repair loop | What happens when quality checks fail | Into stages 8–9 of Fig. 1 | None |
-| **Fig. 3** — Harness | The plumbing under every agent step | Into *any single box* of Fig. 1 | None — no agents at all |
-| **Fig. 4** — Eval loop | Running Fig. 1 unattended, hundreds of times | Back — whole system as one box | One |
+## 1 · What we're building
 
-### The crew, in plain terms
+### The goal
 
-| Agent | What it actually does |
+Give the system a topic. It decides the format, researches the subject, writes a multi-character script, casts and voices the speakers, scores it, cuts it to the beat — then runs eleven automated quality checks and repairs its own mistakes until the result passes.
+
+The interesting output is not the video. It is the **pass rate**: the percentage of runs that clear all eleven checks, tracked per format, over time, as the system is tuned.
+
+### The problem, at two altitudes
+
+**For creators**, short-form video is assembled, not authored. Someone writes a script, records voice, finds footage, picks music — and then spends the real hours on the mechanical part. Making cuts land on beats. Keeping captions readable. Keeping music out of the way of the voice. Hitting a platform's duration and loudness spec. That work is tedious, unglamorous, and it is where the time goes.
+
+**For agent systems**, generating a plausible video is easy and generating a *correct* one is not. Almost every AI video tool produces one output and hopes. Nothing checks whether the cuts are on the beat, whether the captions can be read at that speed, whether the character in shot 6 is the same person as in shot 2, or whether the script's claims trace to anything real. Without those checks there is no way to say whether the system is improving — only whether the last demo looked good.
+
+**This project treats the second problem as the interesting one.**
+
+### What makes it different
+
+| | Typical generator | This |
+|---|---|---|
+| Output | An `.mp4` | An **edit decision list**, rendered deterministically |
+| Quality | Whatever came out | Eleven checks, nine of them free arithmetic |
+| On failure | Ship it anyway | Route the violation to the agent that caused it, repair, re-check |
+| Characters | Regenerated per shot, drift visible | Generated once, cached, animated — drift impossible by construction |
+| Evidence it works | A good-looking demo | Pass rate across a scenario bank, tracked over time |
+
+The consequence is that the system can answer a question most agent demos can't: **is it actually improving, and by how much?**
+
+### Formats
+
+A format is not a prompt. It is a set of constraints the planner must satisfy and the QC gate verifies.
+
+| Format | Cast | Constraints |
+|---|---|---|
+| Solo explainer | 1 | VO-continuous, hook ≤ 3s, one idea per shot |
+| Two-host podcast | 2 | Turn-taking, 4–12s turns, one interruption |
+| Interview | 2 | Asymmetric knowledge — host asks, guest answers |
+| Debate | 2 | Opposing positions, tension escalating to the drop |
+| Skit | 2–3 | Scene continuity, a setup and a turn |
+
+**The catalog is closed.** Brief picks one of the five and cannot invent a sixth — that is what keeps pass rate comparable across runs. What it *can* do is tune parameters within a format's legal range: narrowing a debate's turns from 4–12s to 3–9s for a topic that wants faster exchanges. The QC rules then read their thresholds from the brief rather than from constants, because the alternative is a validator that disagrees with the plan it is validating.
+
+### What gets measured
+
+| Metric | What it tells you |
 |---|---|
-| **Brief** | The producer taking the order. You type "Voynich manuscript"; it decides 35 seconds, two-person debate, wry, flat-vector. Turns a vague topic into a spec sheet. |
-| **Research** | The fact-checker. Sources exactly the beats the Showrunner's outline flagged as needing a fact — not the topic broadly — so nothing is researched and discarded. |
-| **Showrunner** | Writer and director — the most important one. Runs **twice**: an outline pass that structures the arc and flags what needs facts, then a script pass that writes dialogue and cuts against a real beat grid. |
-| **Casting** | The character designer. Draws each character once in several poses, and keeps Person 1 looking like Person 1 in every shot. Renders the backgrounds the script describes. |
-| **Voice** | The voice director. Routes each line to its character's voice and measures how long the line *actually* takes. Deterministic on the hot path — it only thinks when something goes wrong. |
-| **Scoring** | The music supervisor. Also runs **twice**: picks the track and hands over an exact beat grid before anything is planned, then fits a ducking envelope once the voice exists. |
-| **Improvement** | Makes no videos. Reads how the other six performed across hundreds of runs and proposes changes. Appears only in Fig. 4. |
-
-**The one-line version:** Fig. 1 is the product. Fig. 3 is the engine. Fig. 2 is what makes the product reliable. Fig. 4 is what proves it.
+| QC pass rate, by format | Whether the planner handles complexity. Expect it to fall as cast size rises — that curve is the most interesting finding in the project. |
+| Repair rounds to green | Planning quality, directly. A better Showrunner needs fewer rounds. |
+| Cost per finished reel | Whether the system is getting cheaper as it gets better. Doubles as the budget instrument. |
+| Override rate at each gate | How often a human rejects what auto-approve accepted. Points at the weakest judgment in the system. |
+| Violation frequency by rule | Where to aim the next improvement. |
+| Cache hit rate on casts | The single largest lever on cost. |
 
 ---
 
-## Four load-bearing decisions
+## 2 · Four load-bearing decisions
 
 Everything downstream follows from these. If one changes, the architecture changes.
 
-### The EDL is the artifact, not the video
+### 2.1 · The EDL is the artifact, not the video
 
 Agents produce an edit decision list — shots with in/out points, VO segments with timing, a music track with a marked drop, caption spans, an intensity envelope. The video is a deterministic render of that document.
 
 This makes evaluation cheap (most checks run on the plan, no pixels generated), makes the agent's reasoning diffable, and makes re-targeting to another platform a re-render rather than a re-generation.
 
-### Characters are assets, not generations
+### 2.2 · Characters are assets, not generations
 
-Each character is generated once as a sprite set — five poses plus a mouth-open variant — content-hashed, cached, and then animated by arithmetic: a 5Hz talk cycle gated by audio amplitude, a sine bob at idle, scale pulses on emphasis, hard cuts on beats. Identity consistency becomes structural instead of probabilistic.
+Each character is generated once as a sprite set — five poses plus a mouth-open variant — content-hashed, cached, then animated by arithmetic: a 5Hz talk cycle gated by audio amplitude, a sine bob at idle, scale pulses on emphasis, hard cuts on beats. Identity consistency becomes structural instead of probabilistic.
 
-**The cost consequence is the one that matters at a $100 ceiling: output frame rate is free.** Frames are composited by ffmpeg on CPU, so 24, 30, and 60fps cost exactly the same. Nothing is generated per frame, per second, or per shot. The only thing that costs money is a *distinct drawing*, and there are six of them per character, generated once and reused across every reel that casts the same archetype.
+**The cost consequence is the one that matters at a $100 ceiling: output frame rate is free.** Frames are composited by ffmpeg on CPU, so 24, 30 and 60fps cost exactly the same. Nothing is generated per frame, per second, or per shot. The only thing that costs money is a *distinct drawing*, and there are six per character, reused across every reel that casts the same archetype.
 
 **Renders run at 30fps**, chosen on how it divides rather than on cost: a 3-frame mouth hold lands the talk cycle at 5Hz, inside the natural syllable band, and divides evenly so the alternation never judders. The frame rate is pinned in config and recorded per run, because it changes the output bytes and *same EDL → same bytes* has to keep meaning something.
 
 > **Frame duration is a floor on beat-alignment precision.** Cuts quantize to frame boundaries, so at 30fps a cut can sit ±16.7ms off its beat no matter how good the planner is. That is a quarter of the 60ms threshold — fine. Tighten the threshold below ~35ms and the frame rate becomes the limiting factor rather than the Showrunner, at which point the rule measures the encoder. 60fps halves the error if that headroom is ever needed, and costs only ffmpeg time.
 
-Sprites are keyed on `(archetype, style, pose)` rather than on the topic, so "a skeptic in flat vector" is drawn once and reused everywhere. Cache hit rate on an eval sweep lands near 95%, which is what makes hundreds of runs affordable — and it is the single largest lever on cost per reel, so it belongs on the dashboard from day one.
+Sprites key on `(archetype, style, pose)` rather than on topic, so "a skeptic in flat vector" is drawn once and reused everywhere. Cache hit rate on an eval sweep lands near 95%, which is what makes hundreds of runs affordable.
 
-**Backgrounds come from a library by default**, not from generation. Per-shot generated backgrounds are near-unique by construction and therefore barely cache; they would have become the most expensive stage in the pipeline immediately after characters were optimised to nearly zero. Generation stays available behind a `--bespoke-bg` flag for the handful of reels a human actually watches.
+**Backgrounds come from a library by default**, not from generation. Per-shot generated backgrounds are near-unique by construction and barely cache; they would have become the most expensive stage in the pipeline immediately after characters were optimised to nearly zero. Generation stays available behind a `--bespoke-bg` flag for the handful of reels a human actually watches.
 
-### Gates sit where changes are cheap and consequences are expensive
+### 2.3 · Gates sit where changes are cheap and consequences are expensive
 
 Two hard gates: after the brief, and after the plan. Both operate on text. Everything downstream of the second gate runs autonomously under automatic QC. Per-shot approval is deliberately absent — it is too granular to be useful and it destroys the ability to run unattended.
 
-> **One knowing exception.** Music selection now runs *before* Gate 2, because the Showrunner needs a real beat grid to cut against. Gate 2 is therefore no longer strictly upstream of all asset spend. Acceptable because the track comes from a pre-scored library — the selection is a lookup, not a generation — but it is a deliberate softening of this principle rather than an oversight.
+> **One knowing exception.** Music selection runs *before* Gate 2, because the Showrunner needs a real beat grid to cut against. Gate 2 is therefore no longer strictly upstream of all asset spend. Acceptable because the track comes from a pre-scored library — the selection is a lookup, not a generation — but it is a deliberate softening of this principle rather than an oversight.
 
-### Every gate has an auto-approve path — and one dial controls them all
+### 2.4 · Every gate has an auto-approve path — and one dial controls them all
 
 A system that requires a human cannot be evaluated, and the evaluation harness is the reason this project is worth building.
 
-The mechanism is a single run-level integer, **`involvement: 0–10`**, that resolves to a question budget and a confidence threshold. The agent scores its own confidence per field and asks about the least-confident ones until the budget runs out; everything unasked is decided and shown as an editable assumption chip.
+The mechanism is a single run-level integer, **`involvement: 0–10`**, resolving to a question budget and a confidence threshold. Each agent scores its own confidence per field and asks about the least-confident ones until the budget runs out. Everything unasked is decided and shown as an editable assumption chip.
 
-| Dial | Questions | Asks below confidence | Feels like |
-|---|---|---|---|
-| **0** | 0 | — | Vending machine — topic in, video out |
-| **5** | 2 per gate | 0.60 | Asks about the one or two real forks |
-| **10** | 6 per gate | 0.99 | Collaborator — confirms nearly everything |
+| Dial | Question budget | Ask if confidence below | Gate 1 | Gate 2 | Feels like |
+|---|---|---|---|---|---|
+| **0** | 0 | — | silent | silent | Vending machine — topic in, video out |
+| **3** | 1 | 0.35 | ~1 q | ~1 q | Asks only when genuinely stuck |
+| **5** | 2 | 0.60 | ~2 q | ~2 q | Asks about the one or two real forks. **Default.** |
+| **8** | 4 | 0.85 | ~4 q | ~4 q | Checks most creative calls with you |
+| **10** | 6 | 0.99 | ~6 q | ~6 q | Collaborator — confirms nearly everything |
+
+```
+involvement → (question_budget, ask_threshold)
+              ↓
+  fields ranked by confidence, ascending
+              ↓
+  ask about fields where conf < ask_threshold,
+  stopping at question_budget
+              ↓
+  everything unasked is decided and shown
+  as an editable assumption chip
+```
 
 **`involvement: 0` is not a headless mode. It is the same agent, asking zero questions.** The eval sweep runs at 0 and the product ships at 5, with no second code path to drift out of sync. The delta between them — how often a human overrides what auto-approve accepted — becomes a first-class metric, and plotting override rate *against* the dial points straight at the weakest judgment in the system.
 
+Even at 10, unasked fields still appear as chips. The dial controls what gets asked *proactively*; the gate always shows everything decided.
+
 ---
 
-## Fig. 1 — The pipeline
+## 3 · The pipeline
 
 One request, end to end. Solid edges are the forward path; dashed edges are feedback. The only cycle in the system is the QC repair loop — everything else is a straight line, which is what keeps it debuggable.
 
@@ -117,96 +180,329 @@ flowchart TD
     RR -. "resynth line" .-> A5
     RR -. "refit envelope" .-> A6B
     RR -. "re-source claim" .-> A2
-    RR -. "rounds exhausted" .-> HU["Escalate to human"]
+    RR -. "rounds exhausted" .-> HU["Escalate — ship with report"]
     QC -- "green" --> OUT["Deliverable + QC report"]
 ```
 
-**Three orderings here are load-bearing, and each was chosen against an obvious-looking alternative.**
+**Three orderings are load-bearing, and each was chosen against an obvious-looking alternative.**
 
 > **Scoring runs first, before anything is planned.** The Showrunner cuts to a beat grid, and that grid has to be real. Because tracks come from a pre-scored library, their grids and drop positions are measured exactly, offline — so beat alignment is checked against ground truth. Every `beat_alignment` failure is then a genuine planning failure, never beat-detection error. Scoring also *proposes* the drop from the track's own structure, and the outline places its emotional turn there: the story lands on a real musical event instead of an arbitrary timestamp.
 
 > **Research sits between the Showrunner's two passes.** You cannot know which facts you need until you know what the script is about. The outline flags beats as `needs_fact`; Research sources exactly those. Researching the topic broadly first spends money on claims the script never uses, and quietly lets whatever the search surfaced dictate the story.
 
-> **The edge people forget — and it is not an agent edge.** Synthesized speech is never the length you estimated. But the correction is arithmetic, not judgment: real durations replace estimates, an underrun holds the last frame, an overrun steals slack from neighbouring pauses, and cuts snap to the nearest real beat. Only when the drift exceeds `max_hold_s` does a model get called — and then it rewrites *that line only*. Without this the cuts drift off the grid and alignment fails on every run, for a reason that has nothing to do with planning quality.
+> **The edge people forget — and it is not an agent edge.** Synthesized speech is never the length you estimated. But the correction is arithmetic, not judgment: real durations replace estimates, an underrun holds the last frame, an overrun steals slack from neighbouring pauses, and cuts snap to the nearest real beat. Only when drift exceeds `max_hold_s` does a model get called — and then it rewrites *that line only*. Without this the cuts drift off the grid and alignment fails on every run, for a reason that has nothing to do with planning quality.
 
 ---
 
-## Agent responsibilities
+## 4 · The agents
 
-Six agents, and each one earns its place by owning a decision the others cannot make. Loop depth is the honest measure of whether something needs to be an agent at all.
+Seven agents. Six make a video, one improves the other six. Each earns its place by owning a decision the others cannot make.
 
-| Stage | Owns | Key tools | Loop | Repairable |
+| # | Agent | Owns the decision | Loop | Repair inbox |
 |---|---|---|---|---|
-| **1 · Brief** | Format + params, cast, voices, duration, tone, visual direction | `format_catalog`, `topic_probe`, `duration_policy` | Shallow | No — gated |
-| **6a · Scoring** | Track selection, exact beat grid, proposed drop | `track_select` | None — a lookup | Yes — reselect |
-| **3a · Showrunner** | Beats, arc, turn placement, `needs_fact` flags | `format_validator`, `beat_grid`, `shot_budget` | Shallow | Yes |
-| **2 · Research** | Claim ledger with per-claim sourcing | Gemini grounded search, `contradiction_check` | Deep | Yes |
-| **3b · Showrunner** | Dialogue, shot boundaries, cut points, background descriptions | `format_validator`, `beat_grid`, `duration_estimate`, `shot_budget` | Deep | Yes — primary |
-| **4 · Casting** | Sprite sets, backgrounds, identity coherence, asset cache | `imagen_generate`, `identity_distance`, `cache_lookup` | Medium | Yes |
-| **5 · Voice** | Speaker routing, prosody, measured timing | `tts_synthesize`, `measure_duration`, `loudness_normalize` | **None on the hot path** | Yes |
-| **6b · Scoring** | Ducking envelope, loudness | `envelope_fit`, `loudness_measure` | Shallow | Yes |
+| 1 | [Brief](#41--brief-agent) | What kind of video this should be | Shallow | **None** — gated |
+| 2 | [Research](#42--research-agent) | What is true and where it came from | Deep | `grounding` |
+| 3 | [Showrunner](#43--showrunner) | What gets said, by whom, where cuts land | Shallow + Deep | **6 of 11 rules** |
+| 4 | [Casting](#44--casting-agent) | What the characters look like, consistently | Medium | `identity_drift` |
+| 5 | [Voice](#45--voice-agent) | How each line sounds and how long it really takes | **None** on hot path | `speaker_attribution` |
+| 6 | [Scoring](#46--scoring-agent) | The track, the grid, the drop, the ducking | None + Shallow | `music_ducking` · `loudness_spec` |
+| 7 | [Improvement](#47--improvement-agent) | Which knob to turn next, and why | Offline | n/a |
 
-Two agents run twice rather than being split into four. The Showrunner's outline and script passes share a prompt and a metric — splitting them would double the surface the Improvement Agent has to search for half the attribution benefit. Scoring's two passes are forced apart by ordering, not by skill: the grid is needed before planning, and the ducking envelope cannot exist until the VO spans do.
+**Every agent is the same shape.** Input (a typed document — never free text after stage 1), output (a typed document), tools (from a fixed registry — no agent gets an open-ended tool), loop depth, trigger, repair inbox, budget, failure mode. An agent needing an exception to this shape is a design decision worth writing down.
 
-**Every repair is scoped.** A violation on line 4 rewrites line 4 — not the script. Casting regenerates the outlier pose, not the sprite set; Research re-sources the claim, not the ledger. This keeps repairs cheap, prevents collateral drift into parts that already passed, and — most importantly — means round 2 can never undo round 1, which is the failure mode that makes repair loops thrash.
+**Two agents run twice rather than being split into four.** The Showrunner's outline and script passes share a prompt and a metric — splitting them would double the surface the Improvement Agent has to search for half the attribution benefit. Scoring's two passes are forced apart by ordering, not by skill: the grid is needed before planning, and the ducking envelope cannot exist until the VO spans do.
 
 ---
 
-## Fig. 2 — The repair loop
+### 4.1 · Brief Agent
 
-This is the part that distinguishes the project from a generation pipeline. A violation is not a failure — it is a typed message routed to whichever agent owns the rule, with the evidence attached. The router is deterministic; the repair is not.
+**The producer taking the order.** You type "Voynich manuscript"; it decides 35 seconds, two-person debate, wry, flat-vector. Turns a vague topic into a spec sheet.
 
-```mermaid
-flowchart LR
-    QC["QC Gate"] --> V["Violation list<br/>rule · severity · owner · evidence"]
-    V --> RR{"Repair Router"}
-    RR -- "timing, structure,<br/>reading speed" --> SH["Showrunner<br/>rewrite the failing span only"]
-    RR -- "identity drift" --> CA["Casting<br/>regenerate outlier pose"]
-    RR -- "attribution, prosody" --> VO["Voice<br/>resynth line"]
-    RR -- "beat offset, ducking" --> SC["Scoring<br/>refit envelope"]
-    RR -- "grounding" --> RE["Research<br/>re-source claim"]
-    SH --> RC["Recompose"]
-    CA --> RC
-    VO --> RC
-    SC --> RC
-    RE --> SH
-    RC --> QC
-    RR -. "round > 3 · over budget" .-> ESC["Escalate<br/>ship with report"]
+| Slot | |
+|---|---|
+| **Input** | Topic string + `involvement: 0–10` |
+| **Output** | Brief document ([§6](#6--contracts-between-stages)) |
+| **Tools** | `format_catalog` · `topic_probe` · `duration_policy` |
+| **Loop depth** | Shallow — one probe, one decision call |
+| **Called when** | First, always |
+| **Repair inbox** | **None.** Gated, never repaired — a bad brief is a failed run, not a repaired one. |
+| **Budget** | `$0.005` · **abort** on breach |
+| **Failure mode** | Picks the wrong format. Everything downstream is then competently executed against the wrong spec. |
+
+**✅ Locked**
+
+- **Closed format catalog, parameters tunable within it.** Keeps pass-rate-by-format comparable across runs while letting the planner adapt per topic.
+- **QC thresholds read from `brief.params`, never constants.** A direct consequence of the above. Cheap now, expensive to retrofit.
+- **One unconditional `topic_probe` before deciding.** Unconditional beats conditional-on-confidence: it is one cheap call, it makes the trajectory the same shape every run, and it means confidence is computed *after* seeing evidence rather than from the topic string alone.
+- **Gate 1 auto-approves unconditionally.** No blocking validator. A malformed brief flows downstream and gets caught by QC as some other rule's violation — which stress-tests the rest of the system rather than hiding behind a guard.
+- **Schema check runs but never blocks.** An illegal brief (`cast_size: 3` on a debate) would otherwise surface downstream as a *Showrunner* violation, and the Improvement Agent would aim its next mutation at the wrong prompt. So the validator runs and records only:
+
+```yaml
+brief_invalid: true
+reason: "cast_size 3 illegal for format debate (allows 2)"
+# run continues. QC violations on this run are tagged
+# caused_by: brief, and excluded from the Showrunner's metric.
 ```
 
-Bound it at three rounds. An unbounded repair loop is how you wake up to a $40 overnight bill and a trajectory 400 steps long. When rounds are exhausted, ship the artifact *with* its violation report rather than failing — partial output plus an honest account of what's wrong is more useful than nothing, and it makes the failure legible.
+- **Users pin coarse fields only** — `format`, `duration_s`, `cast_size`. Everything creative stays Brief's to decide. Pinned fields are hard constraints, not hints.
+
+> **Follow-on:** the scenario bank cannot use pinning to inject a known-good brief for eval isolation, since that needs *every* field. That is a harness concern instead — the runner injects a brief document and skips stage 1 entirely. Build it when the eval harness lands, not before.
 
 ---
 
-## QC rule set
+### 4.2 · Research Agent
 
-The economics of this table are the economics of the project. Nine of the eleven rules are pure computation, which is what makes a 100-run eval sweep cost cents instead of dollars.
+**The fact-checker.** Sources exactly the beats the outline flagged as needing a fact — not the topic broadly — so nothing is researched and discarded.
 
-| Rule | Check | Threshold from | Cost | Owner |
-|---|---|---|---|---|
-| Beat alignment | Cut offset from the track's **exact** beat grid, in ms | `brief.params` | Free | Showrunner |
-| Duration adherence | Total runtime within target ± tolerance | `brief.params` | Free | Showrunner |
-| Reading speed | Caption chars/sec against subtitle standards | `brief.params` | Free | Showrunner |
-| Pacing curve | Shot-length distribution vs. intensity envelope | `brief.params` | Free | Showrunner |
-| Speaker attribution | Each line rendered in its character's voice | fixed | Free | Voice |
-| Screen-time balance | Per-character share vs. configured split | `brief.params` | Free | Showrunner |
-| Identity drift | Perceptual distance from canonical reference | `brief.params` | Free | Casting |
-| Music ducking | Rendered dB deltas match Scoring's declared envelope | fixed | Free | Scoring |
-| Loudness spec | Integrated loudness at −14 LUFS | fixed | Free | Scoring |
-| Grounding | Checkable claims traceable to the claim ledger | 🔒 pinned | Flash | Research |
-| Coherence | Rubric score on arc, hook, and turn quality | 🔒 pinned | Flash | Showrunner |
+| Slot | |
+|---|---|
+| **Input** | Outline, with beats flagged `needs_fact` |
+| **Output** | Claim ledger — ~6–10 checkable assertions, each with a source |
+| **Tools** | Gemini grounded search · `contradiction_check` |
+| **Loop depth** | Deep — one grounded call per open beat, iterating until every flagged beat is answered or declared unanswerable |
+| **Called when** | Between the Showrunner's outline and script passes |
+| **Repair inbox** | `grounding` → re-source the specific failing claim, not the ledger |
+| **Budget** | `$0.020` · **degrade** on breach — ship fewer sourced claims and let `grounding` fail honestly |
+| **Failure mode** | Sources a claim the script does not make, or misses one it does. |
 
-**Thresholds come from the brief, not from constants.** Because Brief tunes format parameters per topic — narrowing a debate's turn length from the catalog's 4–12s to 3–9s, say — the rules must read `brief.params` rather than hardcoding numbers. Write them that way from the first rule; retrofitting parameterized thresholds into hardcoded ones is the same expensive mistake as retrofitting multi-speaker support.
+**✅ Locked**
 
-**The two model-graded rules are pinned and never mutable.** 🔒 See [Fig. 4](#fig-4--evaluation-and-self-improvement) — if the Improvement Agent can reach a grader, the cheapest way to raise the pass rate is to make the judge lenient.
-
-Split the set by stage. Rules that read only the EDL run before any asset is generated — that is your cheap gate, and it catches most planning failures for free. Rules that need rendered audio or pixels run after compositing, on far fewer runs.
+- **Claim bar = checkable assertions only.** Roughly 6–10 entries per reel. Small enough to actually read at Gate 2.
+- **Runs for every format including fiction, graded uniformly.** No `if factual` branch anywhere. A skit scoring low on grounding is accepted as real signal — softening it would make the pass rate mean two different things depending on the input.
+- **Gemini grounded search over hand-rolled search + fetch.** Less code, same stack constraint. **Requires the recorder to persist returned text and `groundingMetadata` verbatim** — retrieval will not reproduce next week, and replay breaks without it.
 
 ---
 
-## Contracts between stages
+### 4.3 · Showrunner
 
-Fix these four shapes early. Retrofitting multi-speaker support into a single-narrator schema is the expensive mistake — design for *n* characters on day one even while you implement *n* = 1.
+**Writer and director — the most important agent.** Runs **twice**: an outline pass that structures the arc and flags what needs facts, then a script pass that writes dialogue and cuts against a real beat grid.
+
+| Slot | 3a · Outline | 3b · Script |
+|---|---|---|
+| **Input** | Brief + beat grid + drop | Outline + claim ledger + grid |
+| **Output** | Beats, arc, turn placement, `needs_fact` flags | Dialogue lines + EDL |
+| **Tools** | `format_validator` · `beat_grid` · `shot_budget` | + `duration_estimate` |
+| **Loop depth** | Shallow | **Deep** — iterates against the validator |
+| **Budget** | `$0.010` · **abort** | `$0.025` · **degrade** |
+| **Failure mode** | Arc doesn't land on the drop | Turns outside legal range; cuts off-grid |
+
+**Repair inbox — six of the eleven rules.** Timing · structure · reading speed · pacing · screen-time balance · coherence. This agent absorbs the majority of all repairs, which is consistent with it owning the majority of the creative decisions.
+
+**✅ Locked**
+
+- **One agent, two passes — not two agents.** Half the prompt surface for the Improvement Agent to search. Split later only if the metrics justify it.
+- **Retime is deterministic arithmetic, no model call.** See the absorption ladder under [Voice](#45--voice-agent). Free and reproducible. When the nudge cannot absorb the drift, the existing repair loop is the escalation path.
+- **Cuts are planned against a real beat grid**, supplied by Scoring before the outline runs. Never against an estimate.
+
+---
+
+### 4.4 · Casting Agent
+
+**The character designer.** Draws each character once in several poses and keeps Person 1 looking like Person 1 in every shot.
+
+| Slot | |
+|---|---|
+| **Input** | Brief cast list + EDL shot list |
+| **Output** | Sprite sets, backgrounds, cache manifest |
+| **Tools** | `imagen_generate` · `identity_distance` · `cache_lookup` |
+| **Loop depth** | Medium |
+| **Called when** | After Gate 2, in parallel with Voice |
+| **Repair inbox** | `identity_drift` → regenerate the **outlier pose only**, never the sprite set |
+| **Budget** | `$0.005` · **degrade** — ≈$0 warm; this cap is really an amortised allowance for cold archetypes |
+| **Failure mode** | A character drifts and the cache silently misses, turning a $0 stage into the most expensive one. |
+
+**✅ Cache key: archetype by default, override when it matters**
+
+```
+default   key = hash(archetype, style, pose)
+          "skeptic" + flat_vector → sprite_a1b2
+          reused across voynich, bigfoot, roswell, bermuda…
+
+override  brief sets distinct: true on a character
+          key = hash(archetype, style, pose, descriptor, seed)
+          fresh generation, topic-specific look
+```
+
+This is the decision that makes a 100-run eval sweep affordable. The sweep runs all-default, so a hundred topics share a handful of archetypes and the hit rate lands near 95%. The override exists for the one reel where a character genuinely has to look like a specific person — and because it is opt-in, it can never quietly wreck sweep economics.
+
+> Put **cache hit rate on the dashboard from day one.** It is the single largest lever on cost per reel, and a regression here is invisible in every other metric.
+
+**✅ Poses: fixed core, bounded extras**
+
+```
+core     [talking, listening, reacting, gesturing, idle]
+         every character, always, cached and shared
+
+extras   max 2 per reel, requested by the Showrunner
+         for a specific moment — facepalm, pointing, …
+```
+
+The core set keeps the EDL validatable against a fixed enum *before any pixel is generated* — a free QC check on the plan. Extras stay bounded so marginal cost per reel is knowable in advance rather than a function of how expressive the Showrunner felt.
+
+**✅ Animation: 6 sprites per character, moved by arithmetic**
+
+Nothing is animated by a model. Five poses plus one mouth-open variant, cached forever, moved by the compositor:
+
+```
+sprites per character = 5 core poses + 1 mouth-open = 6   ← the only cost
+
+  talking  →  alternate base/mouth-open, gated by audio amplitude
+  idle     →  sine bob
+  emphasis →  scale pulse
+  beats    →  hard cut
+```
+
+**✅ Backgrounds: library by default, generation behind a flag**
+
+```
+default          library, picked by id          $0
+--bespoke-bg     per-shot generation            the three demo reels
+```
+
+> **A side benefit worth noticing.** With a library, backgrounds cannot drift — nothing generates them. The open question about extending `identity_drift` to background groups disappears on the default path, and only applies under the flag, where you are watching the output by hand anyway.
+
+---
+
+### 4.5 · Voice Agent
+
+**The voice director.** Routes each line to its character's voice and measures how long the line *actually* takes. Deterministic on the hot path — it only thinks when something goes wrong.
+
+| Slot | |
+|---|---|
+| **Input** | Dialogue lines + cast voice assignments |
+| **Output** | Audio segments + **measured** durations written back to the EDL |
+| **Tools** | `tts_synthesize` · `measure_duration` · `loudness_normalize` |
+| **Loop depth** | **None on the hot path.** Model call only on escalation. |
+| **Called when** | After Gate 2, in parallel with Casting |
+| **Repair inbox** | `speaker_attribution` · prosody → resynth **that line only** |
+| **Budget** | `$0.015` · **degrade** — ~35s of TTS, nearly fixed per run |
+| **Failure mode** | A line renders in the wrong character's voice and nothing upstream notices. |
+
+**✅ Deterministic by default, model call only on escalation**
+
+```
+hot path     no model, reproducible, free to replay
+             voice_id ← brief.cast[speaker].voice
+             delivery ← line.delivery
+             synth → measure → write back
+
+escalation   rare — drift beyond the ladder, or a repair
+```
+
+Voice ids are assigned by **Brief** at cast time, so they are locked before planning and visible at Gate 1. This leaves a distinctness gap — nothing yet guarantees two cast voices sound different. Filed as open.
+
+**✅ The absorption ladder**
+
+Synthesized speech is never the length you estimated. Rather than escalating on every drift, absorb what is absorbable — and the two directions absorb differently.
+
+| Drift | Direction | Handling | Cost |
+|---|---|---|---|
+| ≤ beat tolerance | either | Snap to nearest beat | free |
+| ≤ `max_hold_s` | **under**run | Hold the last frame, or extend the transition | free |
+| ≤ `max_hold_s` | **over**run | Steal slack from neighbouring holds and pauses | free |
+| > `max_hold_s` | either | **Escalate — scoped.** Showrunner rewrites *that line only* | 1 call |
+
+```
+line 4:  est 3.4s  →  actual 5.8s   (+2.4s over)
+   ↓
+adjacent slack available? 0.9s  →  not enough
+   ↓
+2.4s > max_hold_s (2.0)  →  ESCALATE
+   ↓
+SHOWRUNNER: rewrite line 4 only, target ≤ 3.5s spoken
+            lines 1-3, 5-9 and the EDL stay frozen
+```
+
+`max_hold_s` is a brief parameter, not a constant. Default `2.0`.
+
+> **Tune this one downward with data.** In a 35-second reel a 2-second freeze is 6% of runtime held on a static image, and short-form audiences read holds past roughly half a second as a stall. The `pacing_curve` rule will independently flag reels that lean on long holds — which is the check working correctly. Let the eval sweep find the real number rather than arguing it now.
+
+---
+
+### 4.6 · Scoring Agent
+
+**The music supervisor.** Runs **twice**: picks the track and hands over an exact beat grid before anything is planned, then fits a ducking envelope once the voice exists.
+
+| Slot | 6a · Select | 6b · Envelope |
+|---|---|---|
+| **Input** | Brief `music_intent` + duration | Measured VO spans |
+| **Output** | `{track, grid, drop_s}` | Ducking envelope + loudness |
+| **Tools** | `track_select` | `envelope_fit` · `loudness_measure` |
+| **Loop depth** | **None** — a library lookup | Shallow |
+| **Called when** | **First of all**, before the outline | After Voice and the absorption ladder |
+| **Budget** | `$0.000` — no model | `$0.005` · **degrade** |
+| **Failure mode** | No track matches the mood/duration and it picks a bad fit silently | Envelope fights the voice instead of ducking under it |
+
+**Repair inbox:** `beat_offset` → reselect · `music_ducking` and `loudness_spec` → refit.
+
+**✅ Pre-scored library, not generated music**
+
+A generated track needs beat detection, and detection error produces alignment failures that have nothing to do with planning quality — which makes the headline metric untrustworthy. With a pre-scored library the grid is ground truth, so **every beat-alignment failure is a real planning failure.** Generation can be swapped back in later; the interface downstream is `{track, grid, drop_s}` either way.
+
+**✅ Scoring proposes the drop, the outline confirms**
+
+The track's own structure suggests where the emotional turn should sit; the outline places its turn there. Brief's `music_intent.drop_at_s` demotes to a **selection hint**, not a constraint. The story then lands on a real musical event rather than an arbitrary timestamp.
+
+**✅ Scoring fits an explicit envelope**
+
+The envelope is declared as data and applied by a Compositor that decides nothing. That is what lets `music_ducking` verify a real claim instead of confirming its own arithmetic.
+
+---
+
+### 4.7 · Improvement Agent
+
+**Makes no videos.** Reads how the other six performed across hundreds of runs and proposes changes. Appears only in the offline loop ([§10](#10--evaluation-and-self-improvement)).
+
+| Slot | |
+|---|---|
+| **Input** | Grafana aggregates via MCP + exactly two trajectories (best and worst on the target metric) |
+| **Output** | One proposed mutation per sweep |
+| **Loop depth** | Offline, between sweeps |
+| **Repair inbox** | n/a — never participates in a single run |
+| **Failure mode** | Optimises against its own evaluator. Structurally prevented — see below. |
+
+**✅ Search space: thresholds and prompts, nothing else**
+
+It mutates a fixed space — **prompt variants, QC thresholds, brief parameter defaults, shot-budget heuristics** — and never writes arbitrary code. Pipeline topology, the tool registry, and the repair-routing policy are frozen: mutating your error-recovery path means a regression can break the very thing that fixes regressions.
+
+**✅ One mutation per sweep, aimed at the worst rule**
+
+The agent does not get free choice of target. It must attack whichever rule fails most often, which forces a defensible reason for every proposal and keeps each A/B attributable to exactly one cause. That is what lets the writeup claim *this change caused this gain* rather than *things got better*.
+
+**✅ Auto-promote inside guardrails**
+
+Promotion is automatic iff `pass_rate` improved **and** `cost_per_reel` did not rise **and** no single rule regressed by more than 2%. Anything outside those bounds becomes a proposal for a human instead.
+
+**✅ Reads aggregates plus one exemplar pair**
+
+Aggregates say where it hurts; the best/worst trajectory pair says why, at a bounded context cost.
+
+#### 🔒 It cannot touch what grades it
+
+**The Improvement Agent has no write path to grader prompts or grader thresholds.** `grounding` and `coherence` are model-graded, and if either is reachable from the mutation space, the cheapest available way to raise the pass rate is to make the judge lenient — and the agent will find that long before it finds a better Showrunner.
+
+This is the standard failure mode of any system optimizing against its own evaluator, so enforce it **structurally rather than by instruction**: graders live in a separate versioned namespace that `propose_mutation` cannot address, pinned for the project's lifetime, with the version recorded on every run. A pass-rate curve is only meaningful if it means the same thing at both ends.
+
+---
+
+## 5 · Deliberately not agents
+
+Six components that look like they want to be agents and must not be. Restraint here is what keeps the system debuggable.
+
+| Component | Kind | Reason |
+|---|---|---|
+| **Compositor** | Deterministic | Same EDL must produce the same bytes. Any nondeterminism makes every QC result unreproducible and replay meaningless. |
+| **QC Gate** | Validator | A judge you cannot trust to be stable is not a judge. Nine of eleven rules are arithmetic; the two model-graded ones are pinned and versioned. |
+| **Repair Router** | Lookup | Rule-to-owner is a fixed map. Making it a model call adds a failure mode to your error-recovery path, which is the last place you want one. |
+| **Absorption ladder** | Arithmetic | Retiming to measured audio is subtraction, not judgment. A model is called only when drift exceeds `max_hold_s`. |
+| **Voice, on the hot path** | Function | Voice ids come from Brief; delivery comes from the script. Synthesis and measurement are pure calls. |
+| **Track selection** | Lookup | The library is pre-scored, so picking by mood and duration is a query. Grids and drops are measured once, offline, exactly. |
+
+---
+
+## 6 · Contracts between stages
+
+Fix these four shapes early. **Retrofitting multi-speaker support into a single-narrator schema is the expensive mistake** — design for *n* characters on day one even while implementing *n* = 1.
 
 **Brief** — output of stage 1
 
@@ -233,7 +529,7 @@ assumptions: [ ]   # editable chips
 brief_invalid: false   # schema check runs, records, never blocks
 ```
 
-**Dialogue line** — output of stage 3
+**Dialogue line** — output of stage 3b
 
 ```yaml
 idx: 4
@@ -242,7 +538,7 @@ text: "…"
 delivery: { emotion, emphasis[] }
 claim_refs: [ c_07, c_12 ]
 t_est_s: 3.4       # pre-synthesis
-t_actual_s: 3.9    # measured back
+t_actual_s: 3.9    # measured back by Voice
 shot: sh_04
 ```
 
@@ -256,13 +552,13 @@ on_beat: true
 beat_offset_ms: 18
 layers:
   - { type: character, id: skeptic, pose: talking, x, y, scale }
-  - { type: bg, desc: "dim library, manuscript on table" }   # rendered by Casting
+  - { type: bg, id: bg_library_07 }        # library by default
   - { type: caption, span: [12.4, 16.0] }
 intensity: 0.72
 hold_s: 0.4        # absorbed drift — freeze on the last frame
 ```
 
-Poses come from a fixed core set — `talking · listening · reacting · gesturing · idle` — plus at most two Showrunner-requested extras per reel. The fixed core is what lets the EDL be validated against an enum *before any pixel is generated*.
+Poses come from the fixed core set — `talking · listening · reacting · gesturing · idle` — plus at most two Showrunner-requested extras per reel. The fixed core is what lets the EDL be validated against an enum *before any pixel is generated*.
 
 **Violation** — output of stage 8
 
@@ -280,15 +576,85 @@ round: 1
 
 ---
 
-## Fig. 3 — The harness cross-section
+## 7 · QC rules and repair routing
 
-Every agent step in Fig. 1 passes through this path. It is the same code for all six agents, and it is the part of the repository worth keeping — a package with no video-domain imports that happens to be driving a video pipeline today.
+The economics of this table are the economics of the project. **Nine of the eleven rules are pure computation**, which is what makes a 100-run sweep cost cents instead of dollars.
+
+| Rule | Check | Threshold from | Cost | Routes back to |
+|---|---|---|---|---|
+| Beat alignment | Cut offset from the track's **exact** grid, in ms | `brief.params` | Free | Showrunner ⚠️ |
+| Duration adherence | Total runtime within target ± tolerance | `brief.params` | Free | Showrunner |
+| Reading speed | Caption chars/sec against subtitle standards | `brief.params` | Free | Showrunner |
+| Pacing curve | Shot-length distribution vs. intensity envelope | `brief.params` | Free | Showrunner |
+| Screen-time balance | Per-character share vs. configured split | `brief.params` | Free | Showrunner |
+| Coherence | Rubric score on arc, hook, and turn quality | 🔒 pinned | Flash | Showrunner |
+| Speaker attribution | Each line rendered in its character's voice | fixed | Free | Voice |
+| Identity drift | Perceptual distance from canonical reference | `brief.params` | Free | Casting |
+| Music ducking | Rendered dB deltas match Scoring's declared envelope | fixed | Free | Scoring |
+| Loudness spec | Integrated loudness at −14 LUFS | fixed | Free | Scoring |
+| Grounding | Checkable claims traceable to the claim ledger | 🔒 pinned | Flash | Research → **then Showrunner** |
+
+> ⬜ **`beat_alignment` currently has two claimed owners** and must be resolved before the router is written. The rule table assigns it to the Showrunner; Scoring's repair inbox claims `beat_offset → reselect`. **Proposed resolution, unratified:** a single off-beat cut routes to the Showrunner to retime; *systemic* failure (> ⅓ of shots off-grid) routes to Scoring to reselect the track. Until ratified, the router has an ambiguous entry.
+
+**Thresholds come from the brief, not from constants.** Because Brief tunes format parameters per topic, the rules must read `brief.params`. Write them that way from the first rule.
+
+**The two model-graded rules are pinned and never mutable.** 🔒 If the Improvement Agent can reach a grader, the cheapest way to raise the pass rate is to make the judge lenient.
+
+**Split the set by stage.** Rules that read only the EDL run **before any asset is generated** — that is the cheap gate, and it catches most planning failures for free. Rules needing rendered audio or pixels run after compositing, on far fewer runs.
+
+### The repair loop
+
+A violation is not a failure — it is a typed message routed to whichever agent owns the rule, with the evidence attached. The router is deterministic; the repair is not.
+
+```mermaid
+flowchart LR
+    QC["QC Gate"] --> V["Violation list<br/>rule · severity · owner · evidence"]
+    V --> RR{"Repair Router<br/>fixed lookup"}
+    RR -- "timing, structure, reading<br/>speed, pacing, screen time,<br/>coherence" --> SH["Showrunner<br/>rewrite the failing span only"]
+    RR -- "identity drift" --> CA["Casting<br/>regenerate outlier pose"]
+    RR -- "attribution, prosody" --> VO["Voice<br/>resynth line"]
+    RR -- "ducking, loudness" --> SC["Scoring<br/>refit envelope"]
+    RR -- "grounding" --> RE["Research<br/>re-source claim"]
+    SH --> RC["Recompose"]
+    CA --> RC
+    VO --> RC
+    SC --> RC
+    RE --> SH
+    RC --> QC
+    RR -. "round > 3 · over budget" .-> ESC["Escalate<br/>ship with report"]
+```
+
+**Every repair is scoped.** A violation on line 4 rewrites line 4 — not the script.
+
+```
+violation: duration_adherence, evidence { line: 4 }
+   ↓
+SHOWRUNNER receives:  line 4 + the violation + the constraint
+             frozen:  lines 1-3, 5-9, the EDL, every other asset
+   ↓
+one line changes. everything downstream of it is re-derived,
+nothing else is re-generated.
+```
+
+Three things this buys, and they compound: repairs are cheap, they cannot introduce collateral drift into parts that already passed, and **round 2 can never undo round 1** — the failure mode that makes unbounded repair loops thrash.
+
+**Bound the loop at three rounds.** An unbounded repair loop is how you wake up to a $40 overnight bill and a trajectory 400 steps long. When rounds are exhausted, **ship the artifact with its violation report** rather than failing — partial output plus an honest account of what is wrong is more useful than nothing, and it makes the failure legible.
+
+**Grounding is the only two-hop repair.** Research re-sources the claim, then hands to the Showrunner to rewrite the line that used it. Every other fix goes straight back to recompose.
+
+**Nothing routes to Brief.** A bad brief is a failed run. The non-blocking schema check tags the run `caused_by: brief` so its violations are excluded from the Showrunner's metric — otherwise the Improvement Agent spends a month tuning the wrong prompt.
+
+---
+
+## 8 · The harness
+
+Every agent step passes through this path. It is the same code for all seven agents, and **it is the part of the repository worth keeping** — a package with no video-domain imports that happens to be driving a video pipeline today.
 
 ```mermaid
 flowchart TD
     ST["Any agent step"] --> BU{"Budget check<br/>steps · dollars · wall clock"}
-    BU -- "exceeded" --> AB["Abort — emit partial trajectory"]
-    BU -- "ok" --> PO{"Approval policy"}
+    BU -- "exceeded" --> AB["Abort · degrade · escalate<br/>per stage policy"]
+    BU -- "ok" --> PO{"Approval policy<br/>involvement dial"}
     PO -- "interactive" --> HG["Human gate"]
     PO -- "auto" --> TR["Typed tool registry"]
     HG --> TR
@@ -299,31 +665,81 @@ flowchart TD
     OT --> GC[("Grafana Cloud")]
 ```
 
-Two details worth building properly. **The budget check runs first** — checking after execution means you have already spent the money. And **the trajectory recorder captures both the model call and the tool result**, which is what makes replay possible: when only your grading logic changes, you re-score recorded runs at zero cost instead of re-running the agent. With grounded search in the pipeline that recorder must persist the returned text and citation metadata verbatim, not just the query — retrieval will not reproduce next week, but re-scoring against stored evidence stays free.
+Two details worth building properly.
 
-### Budget caps are per stage, and breach behaviour is not uniform
+**The budget check runs first.** Checking after execution means you have already spent the money.
 
-Total project credit is **$100**, which makes this the enforcement point for the whole system rather than a safety net. Every stage carries a hard dollar cap checked before execution, and the run carries a hard total of **`$0.110`** — sized so that a 100-scenario sweep costs about $11 and the improvement loop gets enough sweeps to prove something.
+**The trajectory recorder captures both the model call and the tool result**, which is what makes replay possible: when only your grading logic changes, you re-score recorded runs at zero cost instead of re-running the agent. With grounded search in the pipeline the recorder must persist returned text and citation metadata **verbatim**, not just the query — retrieval will not reproduce next week, but re-scoring against stored evidence stays free.
 
-| | |
-|---|---|
-| **Abort** on breach | Brief · Showrunner outline · **QC graders** |
-| **Degrade** on breach | Research · Showrunner script · Casting · Voice · Scoring envelope |
-| **Escalate** on breach | Repair pool — ship with the violation report |
+### Implementation stance
 
-Cheap early stages abort because restarting costs nothing; expensive late stages degrade, emitting what they have so the run isn't thrown away after most of its money is spent. **QC is the exception that proves it: it never degrades.** Running out of budget at the gate voids the run rather than producing a softer verdict, because a partial judge is worse than no judge when the pass rate is the product.
+**Write the harness directly against the `google-genai` SDK rather than adopting an agent framework.** Frameworks earn their keep when control flow is emergent; this pipeline is a fixed ten-stage DAG with one bounded cycle, and only two stages (Research, Showrunner-script) actually iterate. The two genuinely novel pieces — three-way breach behaviour and verbatim-grounding replay — have no framework equivalent and would be built anyway.
 
-Full per-stage table, with rationale: [AGENTS.md § Cost model](AGENTS.md#-cost-model--the-100-constraint).
+If the track mandates ADK, wrap rather than restructure: make each stage a `BaseAgent`, let ADK sequence and emit spans, and keep budget enforcement, the recorder, the registry and the dial as harness code called from inside.
+
+⬜ **This decision is not yet ratified in the log.**
 
 ---
 
-## Fig. 4 — Evaluation and self-improvement
+## 9 · Cost model
 
-The offline loop. This runs entirely headless with auto-approve enabled, which is only possible because of the fourth load-bearing decision above.
+Total credit is **$100**. That is not a footnote; it is a design constraint that outranks several decisions above, and it should be the first thing checked against any new idea.
+
+### What actually costs money
+
+| Costs money | Free |
+|---|---|
+| Gemini planning + grading calls | Every rendered frame |
+| Imagen generations (sprites, backgrounds) | Output FPS — 24, 30, 60, identical |
+| TTS synthesis | Resolution, aspect ratio, re-encodes |
+| Grounded search | Re-rendering the same EDL |
+| | Animating, holding, cutting, transitions |
+
+Because the EDL is the artifact and the render is deterministic, **re-rendering is $0**. Every "make it 60fps", "make it square for Instagram", "try it at 1080p" is a free re-run of the compositor. Only re-*planning* spends.
+
+### Hard per-stage caps, checked before execution
+
+No phase pools. Every stage has a ceiling, the harness checks it *before* spending, and the run carries a hard total. The failure mode being guarded against is one runaway trajectory at 3am, not gradual overspend.
+
+> **Rates are placeholders pending confirmation against real spike numbers. The proportions are the argument, not the digits.**
+
+| Stage | Cap | On breach | Why this share |
+|---|---|---|---|
+| 1 · Brief | `$0.005` | **abort** | One probe, one short call. Cheapest stage, and it's the head — aborting costs nothing. |
+| 6a · Scoring select | `$0.000` | — | A library lookup. No model, no cost. |
+| 3a · Showrunner outline | `$0.010` | **abort** | One call over a small context. Still cheap enough to restart. |
+| 2 · Research | `$0.020` | **degrade** | ~4 grounded calls, the priciest text stage. Ship fewer claims and let `grounding` fail honestly. |
+| 3b · Showrunner script | `$0.025` | **degrade** | Deep validator loop, largest context, most retries. The most expensive stage — and where extra spend most reliably buys quality. |
+| 4 · Casting | `$0.005` | **degrade** | ≈$0 warm. An amortised allowance for cold archetypes. |
+| 5 · Voice | `$0.015` | **degrade** | ~35s of TTS. Nearly fixed — barely varies by run. |
+| 6b · Scoring envelope | `$0.005` | **degrade** | One call, or deterministic. |
+| 8 · QC graders | `$0.010` | **abort** | Two Flash calls. Never degrade a grader. |
+| 9 · Repair pool | `$0.015` | **escalate** | Run-level pool, not per-round. Ship with the violation report on breach. |
+| **RUN TOTAL** | **`$0.110`** | **abort** | Hard ceiling. Below the $0.10 target once Casting runs warm. |
+
+**Three things about this table are deliberate.**
+
+**Breach behaviour differs by stage, and that is the point.** Aborting a $0.005 Brief is free; aborting a $0.025 script pass throws away everything already spent on the run. Cheap early stages abort; expensive late ones degrade, emitting what they have so the run is not discarded after most of its money is spent.
+
+**QC never degrades.** It is the only stage where running out of money must not produce a softer answer, because the pass rate is the product. Out of budget at the gate means the run is **void**, not passing.
+
+**Repair is a pool, not a per-round cap.** Round costs vary a lot — a resynth is trivial, a script rewrite is not. A shared pool correctly allows three cheap repairs or stops after one expensive one.
+
+> **Cold-start is a separate line.** The first run using a new archetype generates 6 sprites and blows the Casting cap by design. Track that as a **one-time per-archetype cost, outside the per-run budget** — otherwise the first run of every sweep aborts and you spend a morning debugging a working system.
+
+### Replay is a budget instrument
+
+When only grading logic changes, recorded trajectories are re-scored **at zero cost**. Half the sweeps in the improvement loop never spend a cent. Build it properly in week one precisely because of the $100 ceiling — it is the difference between six sweeps and twenty.
+
+---
+
+## 10 · Evaluation and self-improvement
+
+The offline loop. Runs entirely headless at `involvement: 0`, which is only possible because of load-bearing decision [2.4](#24--every-gate-has-an-auto-approve-path--and-one-dial-controls-them-all).
 
 ```mermaid
 flowchart LR
-    SB["Scenario bank<br/>topics × formats × cast sizes"] --> RN["Headless runner<br/>auto-approve on"]
+    SB["Scenario bank<br/>topics × formats × cast sizes"] --> RN["Headless runner<br/>involvement 0"]
     RN --> TJ["Trajectories"]
     TJ --> GR["Graders<br/>programmatic + rubric"]
     TJ -. "re-score only — free" .-> GR
@@ -337,57 +753,114 @@ flowchart LR
     MU --> RN
 ```
 
-The Improvement Agent is constrained on purpose. It mutates a fixed search space — **prompt variants, QC thresholds, brief parameter defaults, shot-budget heuristics** — and never writes arbitrary code. Pipeline topology, the tool registry, and the repair-routing policy are frozen: mutating your error-recovery path means a regression can break the very thing that fixes regressions. Open-ended self-modification will not be demo-reliable in a month, and the constrained version produces a cleaner result anyway.
-
-**One mutation per sweep, aimed at the highest-frequency violation.** The agent doesn't get free choice of target — it must attack whichever rule fails most often, which forces a defensible reason for every proposal and keeps each A/B attributable to exactly one cause. That's what lets the writeup claim *this change caused this gain* rather than *things got better*, which for a project whose product is the pass rate is the entire argument.
-
-It reads Grafana aggregates through MCP, plus the trajectories of exactly two runs — the best and the worst on the target metric. Aggregates say where it hurts; the exemplar pair says why, at a bounded context cost.
-
-Promotion is automatic inside guardrails: `pass_rate` improved **and** `cost_per_reel` did not rise **and** no single rule regressed by more than 2%. Anything outside those bounds becomes a proposal for a human instead.
-
-### 🔒 It cannot touch what grades it
-
-**The Improvement Agent has no write path to grader prompts or grader thresholds.** `grounding` and `coherence` are model-graded, and if either is reachable from the mutation space, the cheapest available way to raise the pass rate is to make the judge lenient — the agent will find that long before it finds a better Showrunner.
-
-This is the standard failure mode of any system optimizing against its own evaluator, so enforce it structurally rather than by instruction: graders live in a separate versioned namespace that `propose_mutation` cannot address, pinned for the project's lifetime, with the version recorded on every run. A pass-rate curve is only meaningful if it means the same thing at both ends.
-
-### Metrics worth putting on the dashboard
-
-| Metric | Why it earns a panel |
-|---|---|
-| QC pass rate, by format | Expect it to fall as cast size rises. That curve is the most interesting finding in the project. |
-| Repair rounds to green | Measures planning quality directly — a better Showrunner needs fewer rounds. |
-| Cost per finished reel | Should fall over the month. Doubles as your budget instrument. |
-| Override rate at each gate | How often a human rejects what auto-approve accepted. Points at the weakest judgment in the system. |
-| Violation frequency by rule | Tells the Improvement Agent where to aim. |
-| Cache hit rate on casts | The single largest lever on cost. |
+A 100-scenario sweep costs roughly **$11** at the current cap, which buys enough sweeps for the improvement loop to prove something. Above ~$0.30/reel you get two sweeps and the loop has nothing to prove itself against — which costs you the headline result.
 
 ---
 
-## Deliberately not agents
-
-Three components that look like they want to be agents and must not be. Restraint here is what keeps the system debuggable.
-
-| Component | Kind | Reason |
-|---|---|---|
-| **Compositor** | Deterministic | Same EDL must produce the same bytes. Any nondeterminism here makes every QC result unreproducible and replay meaningless. |
-| **QC Gate** | Validator | A judge you cannot trust to be stable is not a judge. Nine of eleven rules are arithmetic; the two model-graded ones are pinned and versioned. |
-| **Repair Router** | Lookup | Rule-to-owner is a fixed map. Making it a model call adds a failure mode to your error-recovery path, which is the last place you want one. |
-| **Absorption ladder** | Arithmetic | Retiming to measured audio is subtraction, not judgment. Holding a frame, stealing slack from a neighbouring pause, snapping to a beat — all deterministic. A model is called only when the drift exceeds `max_hold_s`. |
-| **Voice, on the hot path** | Function | Voice ids are assigned by Brief; delivery comes from the script. Synthesis and measurement are pure calls. The agent exists but is invoked only on escalation and repair. |
-| **Track selection** | Lookup | The library is pre-scored, so picking by mood and duration is a query. Its grids and drop positions are measured once, offline, exactly. |
-
----
-
-## Build order
+## 11 · Build order
 
 Vertical slice first. The single riskiest path — a Gemini call reaching Grafana through the MCP server — gets proven before any architecture is written, because everything on this page is moot if it fails.
 
 | Dates | Milestone |
 |---|---|
-| **Aug 4–6** | **Spike, then commit.** Gemini via ADK calls the Grafana Cloud MCP server and reads one metric. Confirm Imagen and TTS quota and price one render. Assemble the pre-scored music library and measure its beat grids offline — that artifact is a prerequisite for every planning stage downstream. |
+| **Aug 4–6** | ✅ **Spike, then commit.** Gemini calls the Grafana Cloud MCP server and reads one metric. Confirm Imagen and TTS quota and price one render. Assemble the pre-scored music library and measure its beat grids offline — that artifact is a prerequisite for every planning stage downstream. |
 | **Aug 7–13** | **Harness core plus a one-shot spine.** Tool registry, trajectory recorder, budget enforcer. Brief → Showrunner → Compositor with a single narrator and no research. It will look bad. It runs end to end. |
 | **Aug 14–20** | **QC gate and the repair loop.** All nine free rules, the violation schema, the router. This is the week the project becomes what it is. Add Research and Casting once repair closes. |
 | **Aug 21–27** | **Second speaker and the eval harness.** Cast of two, attribution and identity rules live. Scenario bank, headless runner, first real pass-rate number on a Grafana panel. |
 | **Aug 28–Sep 3** | **Improvement loop and hosting.** One measured improvement, start to finish, with a before-and-after curve. Deploy. Freeze features on Sep 3 regardless of what is unfinished. |
 | **Sep 4–5** | **Video, README, writeup — submit.** Three formats on one topic, side by side. Lead the README with the eval curve, not the sample output. Submit Sep 5; the deadline is 2:00pm PDT Sep 7 and you do not want to meet it. |
+
+### Order of work inside week one
+
+1. **Resolve the state-object question** ([Appendix B](#appendix-b--open-questions)) — it decides every function signature in the harness.
+2. **Trajectory recorder.** Model call in, tool result out, both verbatim, append-only, one file per run.
+3. **Budget check, pre-execution.** A map of stage → (cap, breach behaviour) and a guard that runs before the call.
+4. **Tool registry** as a closed dict.
+5. **The ugly spine.** Brief → Showrunner → Compositor, one narrator, no research, no gates.
+
+The involvement dial is deliberately absent from that list. At `involvement: 0` the gate is `pass`, which is exactly the version the spine needs.
+
+---
+
+## Appendix A — Decision log
+
+*Every locked answer with a date, so the eval sweep and this document never disagree.*
+
+| Date | Area | Decision | Why |
+|---|---|---|---|
+| Aug 5 | System | `involvement: 0–10` dial resolves to (question budget, ask threshold) | Interactive and headless become the same code path. `involvement: 0` *is* the eval-sweep mode. |
+| Aug 5 | Brief | Closed format catalog, parameters tunable within it | Keeps pass-rate-by-format comparable while letting the planner adapt per topic. |
+| Aug 5 | Brief | QC thresholds read from `brief.params`, never constants | Direct consequence of the above. Cheap now, expensive to retrofit. |
+| Aug 5 | Brief | One unconditional `topic_probe` before deciding | Confidence gets scored against evidence, not vibes. Same trajectory shape every run. |
+| Aug 5 | Brief | Gate 1 auto-approve accepts unconditionally | Stress-tests downstream QC instead of hiding brief errors behind a guard. |
+| Aug 5 | System | The dial governs **every** gate, not just Gate 1 | Avoids a headless-only bypass for Gate 2 — the eval-only branch most likely to drift. |
+| Aug 5 | Brief | Schema check runs as a non-blocking `brief_invalid` label | Keeps per-agent violation attribution honest, which is the Improvement Agent's only input. |
+| Aug 5 | Brief | Users pin coarse fields only — format, duration, cast size | Creative fields stay the agent's job. Eval-time brief injection is a harness concern. |
+| Aug 5 | **System** | **Showrunner runs two passes, Research sits between them** | You can't know which facts you need before you know the script. Targets every search. |
+| Aug 5 | Research | Claim bar = checkable assertions only | ~6–10 entries per reel. Small enough to actually read at Gate 2. |
+| Aug 5 | Research | Runs for every format including fiction, graded uniformly | No `if factual` branch anywhere. Low skit grounding is accepted as real signal. |
+| Aug 5 | Research | Gemini grounded search over hand-rolled search + fetch | Less code, same stack constraint. **Requires verbatim text + groundingMetadata** or replay breaks. |
+| Aug 6 | Showrunner | One agent, two passes — not two agents | Half the prompt surface for the Improvement Agent to search. |
+| Aug 6 | Showrunner | Retime is deterministic arithmetic, no model call | Free and reproducible. The repair loop is the escalation path. |
+| Aug 6 | **System** | **Scoring moves ahead of Gate 2** | The Showrunner cuts against a real beat grid. **Trade: Gate 2 no longer precedes all asset spend.** |
+| Aug 6 | Casting | Cache key = archetype + style, with opt-in `distinct: true` | ~95% hit rate on a sweep. The override can't wreck sweep economics because it's opt-in. |
+| Aug 6 | Casting | 5 core poses for everyone, max 2 Showrunner-requested extras | Core keeps the EDL validatable against a fixed enum for free. |
+| Aug 6 | Voice | Deterministic on the hot path; model call only on escalation | Reproducible and free to replay, with one prompt left to tune. |
+| Aug 6 | Voice | Voice ids assigned by Brief at cast time | Locked before planning, visible at Gate 1. Leaves a distinctness gap — filed. |
+| Aug 6 | Voice | Absorption ladder: hold/transition under `max_hold_s`, else escalate | Most drift never reaches the repair loop. `max_hold_s` default 2.0. |
+| Aug 6 | **System** | **Repairs are scoped — only the failing span changes** | Cheap, no collateral drift, and round 2 can't undo round 1. |
+| Aug 6 | Scoring | Pre-scored library, not generated music | Beat grid becomes ground truth, so every `beat_alignment` failure is a real planning failure. |
+| Aug 6 | Scoring | Scoring proposes the drop; the outline places its turn there | The turn lands on a real musical event. Brief's `drop_at_s` demotes to a hint. |
+| Aug 6 | Scoring | Explicit ducking envelope, applied by a deciding-nothing Compositor | `music_ducking` verifies a real claim instead of confirming its own arithmetic. |
+| Aug 6 | **System** | **Scoring splits: `6a` first of all, `6b` after Voice** | The grid is needed before planning; the envelope can't exist before the VO spans. |
+| Aug 6 | Improvement | Search space = thresholds + prompt variants; topology and routing frozen | Expressive enough to find real wins, small enough to sweep honestly in a month. |
+| Aug 6 | Improvement | 🔒 **Grader prompts and thresholds are unmutable** | Otherwise the cheapest way to raise the pass rate is to make the judge lenient. |
+| Aug 6 | Improvement | One mutation per sweep, aimed at the highest-frequency violation | Strict A/B is what lets the writeup claim *this change caused this gain*. |
+| Aug 6 | Improvement | Auto-promote iff pass rate ↑, cost not ↑, no rule regressed >2% | Runs unattended overnight, with a floor against trading cost for aggregate gain. |
+| Aug 6 | Improvement | Reads MCP aggregates + best/worst trajectory pair | Bounded context, most of the diagnostic value of reading failure logs. |
+| Aug 7 | Casting | 6 sprites per character — 5 poses + 1 mouth-open — moved by arithmetic | Output FPS is free; only distinct drawings cost. |
+| Aug 7 | Compositor | **30fps**, 3-frame mouth hold (5Hz cycle), pinned in config, recorded per run | Divides evenly into the syllable band. Sets a ±16.7ms floor on beat precision. |
+| Aug 7 | Casting | **Backgrounds revert to a library**; per-shot generation behind `--bespoke-bg` | The $100 ceiling. Per-shot descriptions barely cache. |
+| Aug 7 | **System** | **Hard per-stage dollar caps, checked before execution; no phase pools** | Guards against one runaway trajectory at 3am. Run total `$0.110`. |
+| Aug 7 | System | Breach behaviour differs by stage: cheap-and-early **abort**, expensive-and-late **degrade** | Aborting a $0.005 Brief is free; aborting a $0.025 script pass discards everything spent. |
+| Aug 7 | System | **QC graders never degrade** — out of budget voids the run | The pass rate is the product. A partial judge is worse than no judge. |
+| Aug 7 | System | Repair is a run-level **pool**, not a per-round cap | Round costs vary wildly. A pool allows three cheap repairs or stops after one expensive one. |
+| Aug 7 | System | Cold-archetype sprite generation tracked **outside** the per-run budget | Otherwise the first run of every sweep aborts and you debug a working system. |
+| Aug 7 | Docs | **This document consolidates `AGENTS.md` and `architecture.html`** | Two architecture docs, one of them stale, is how a design silently forks. |
+
+---
+
+## Appendix B — Open questions
+
+None are architectural — every agent's shape is locked. These are tactical, and the ones marked **▲** should be answered before the harness is written.
+
+**System-wide**
+
+- ▲ ⬜ Is state passed as a single growing `Production` object, or does each agent read only its declared inputs? *Decides every function signature in the harness.*
+- ▲ ⬜ Framework stance — ratify raw-vs-ADK in the decision log. *(Recommendation in [§8](#8--the-harness).)*
+- ▲ ⬜ `beat_alignment` ownership — Showrunner, Scoring, or split by systemic-vs-single. *(Proposal in [§7](#7--qc-rules-and-repair-routing).)*
+- ⬜ Where does a run's config live — one YAML per run, or a config diffable across sweeps? How does a run record which config produced it?
+
+**The dial**
+
+- ⬜ Is confidence self-reported by the model, or derived from something more honest — e.g. agreement across two samples?
+- ⬜ Per-run value, or a saved user default a run can override?
+- ⬜ Does the question budget refill at Gate 2, or is it shared across the whole run?
+
+**Per agent**
+
+| Agent | Open |
+|---|---|
+| Brief | Step cap — how many calls before abort *(dollar cap set)* |
+| Research | Verification pass — confirm a claim appears in its cited source, or trust the grounding metadata? · What happens to a beat it can't source — drop, soften, or flag? · Does `contradiction_check` survive at this ledger size? · Step cap |
+| Showrunner | One shot per line, or can a line span shots? · On repair, does it see the full prior script or only the violating span? · Step cap |
+| Casting | What is "canonical" for drift measurement — the first generated pose, or a dedicated reference render? · How many backgrounds in the library, hand-made or generated once offline? |
+| Voice | Voice distinctness check at cast time — Brief's job, in or out? · Loudness: normalize per segment, or only on the final mix? · Step cap |
+| Scoring | Minimum track count for mood coverage? · If no track's drop is near the hint — reselect, or offset the track's start? · Does `6b` get a model call, or is `envelope_fit` deterministic on VO density? |
+| Improvement | Sweep size — how many scenarios before a pass-rate delta is trustworthy? · Where do promoted configs live? · Who stops a sweep mid-flight, and on what signal? |
+
+---
+
+## License
+
+_To be added before submission — Apache-2.0 or MIT._
