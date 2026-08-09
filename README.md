@@ -60,8 +60,7 @@ topic → Brief → [gate] → Scoring:select → Showrunner:outline → Researc
 
 Two gates, both on text, and how chatty they are is one number: **`involvement: 0–10`**. At 10 it confirms nearly every creative call with you; at 0 it asks nothing and runs start to finish untouched. `involvement: 0` isn't a separate headless mode — it's the same agent asking zero questions, which is exactly what makes the eval sweep trustworthy.
 
-**Full system design, with diagrams: [ARCHITECTURE.md](ARCHITECTURE.md)**
-**Per-agent contracts and the decision log: [AGENTS.md](AGENTS.md)**
+**Full system design — agents, contracts, decision log: [ARCHITECTURE.md](ARCHITECTURE.md)**
 
 ---
 
