@@ -12,7 +12,7 @@
 | **Deadline** | September 7, 2026 · submitting Sep 5 |
 | **Status** | Design complete. Implementation begins Aug 7. |
 
-**This is the single authoritative document.** It supersedes `AGENTS.md` and `architecture.html`, both of which should be removed once this has been read. `README.md` remains the short public pitch and is not a design document.
+**This is the single authoritative document.** It absorbed and replaced `AGENTS.md` and `architecture.html`, which were removed on Aug 8 — both remain in git history if anything needs recovering. `README.md` is the short public pitch and is not a design document.
 
 **Status key:** ⬜ open · 🟡 in design · ✅ locked · 🔒 immutable by constraint
 
@@ -64,30 +64,56 @@ The interesting output is not the video. It is the **pass rate**: the percentage
 
 The consequence is that the system can answer a question most agent demos can't: **is it actually improving, and by how much?**
 
-### Formats
+### Intent, format, tone
 
-A format is not a prompt. It is a set of constraints the planner must satisfy and the QC gate verifies.
+A vague prompt — *"make a video about AI agents"* — admits many fundamentally different videos. The system resolves that into three separate choices, proposes all of them at once, and lets the user change any of them.
+
+**Intent — what the video is trying to accomplish.** Three, closed. Each puts `grounding` into a different regime, which is what makes them worth distinguishing rather than merely worth naming.
+
+| Intent | Grounding regime | Absorbs |
+|---|---|---|
+| **Explainer** | Most claim-bearing beats sourced | Education · News · Informational |
+| **Comedy** | Few or no sourced beats — a low score is *correct* | Skits, bits, satire |
+| **Commentary** | Claims are arguable; sources support a position | Opinion, analysis, hot takes |
+
+> **Why not Education / News / Informational as separate intents.** In a 45-second reel they are the same video: all factual, all fully researched, all scoring identically on every one of the eleven rules. Separating them spends sweep budget to discover they are one cell. **Commentary earns the third slot because it is the only intent where a claim can be contested *and* sourced** — a third grounding regime rather than a second label on the first.
+
+**Format — how the idea is presented.** Two, closed.
 
 | Format | Cast | Constraints |
 |---|---|---|
-| Solo explainer | 1 | VO-continuous, hook ≤ 3s, one idea per shot |
-| Two-host podcast | 2 | Turn-taking, 4–12s turns, one interruption |
-| Interview | 2 | Asymmetric knowledge — host asks, guest answers |
-| Debate | 2 | Opposing positions, tension escalating to the drop |
-| Skit | 2–3 | Scene continuity, a setup and a turn |
+| **Monologue** | 1 | VO-continuous, hook ≤ 3s, one idea per shot |
+| **Debate** | 2 | Turn-taking 3–9s, opposing positions, tension escalating to the drop |
 
-**The catalog is closed.** Brief picks one of the five and cannot invent a sixth — that is what keeps pass rate comparable across runs. What it *can* do is tune parameters within a format's legal range: narrowing a debate's turns from 4–12s to 3–9s for a topic that wants faster exchanges. The QC rules then read their thresholds from the brief rather than from constants, because the alternative is a validator that disagrees with the plan it is validating.
+> **Cut from five.** Podcast and Interview were both "two people talking" variants of Debate with near-zero marginal insight. Skit was the 3-cast outlier that also scored worst on grounding — and Comedy now covers that ground as an *intent*, playable in either format. Two formats preserve the cast-size curve (1 vs 2), which is the finding worth having, at 40% of the surface.
+
+**Tone — how it should feel.** Engaging · Professional · Funny · Dramatic · Casual. A product field with **no sweep of its own**: tone does not change whether cuts land on beats, so it earns a user choice but not a cell in the grid.
+
+**Everything is closed and everything is tunable within its range.** Brief cannot invent a fourth intent or a third format — that is what keeps pass rate comparable. What it *can* do is set parameters inside a configuration's legal range, and the QC rules read their thresholds from `brief.params` rather than from constants.
+
+**The intent is a bundle of parameter defaults, not a label:**
+
+```
+Comedy                            Explainer
+  needs_fact:  few beats            needs_fact:  most claim-bearing beats
+  pacing:      faster, shorter      pacing:      steadier
+  drop      =  punchline            drop      =  the "aha"
+  tone      →  funny                tone      →  engaging
+                                    requires a takeaway beat
+```
 
 ### What gets measured
 
 | Metric | What it tells you |
 |---|---|
-| QC pass rate, by format | Whether the planner handles complexity. Expect it to fall as cast size rises — that curve is the most interesting finding in the project. |
+| QC pass rate, **per intent × format** | Whether the planner handles complexity. Never pooled across intents — see below. |
 | Repair rounds to green | Planning quality, directly. A better Showrunner needs fewer rounds. |
 | Cost per finished reel | Whether the system is getting cheaper as it gets better. Doubles as the budget instrument. |
-| Override rate at each gate | How often a human rejects what auto-approve accepted. Points at the weakest judgment in the system. |
+| Override rate at each gate | How often a human changes what was proposed. Points at the weakest judgment in the system. |
 | Violation frequency by rule | Where to aim the next improvement. |
-| Cache hit rate on casts | The single largest lever on cost. |
+| Background plates per reel | The only per-run image cost, so the single largest lever on cost per reel. |
+
+> 🔒 **Pass rate is reported per intent and never pooled across intents.** Because intents carry different thresholds — Comedy's grounding bar is lower than Explainer's — a pooled number can be raised without improving anything, simply by classifying more topics as Comedy. Brief picks the intent, so a pooled metric hands Brief a lever on its own grade. Per-intent reporting closes it: misclassification moves runs between buckets and lifts nothing. **This is the same class of failure as a mutable grader** ([§10](#-it-cannot-touch-what-grades-it)) and deserves the same structural treatment.
 
 ---
 
@@ -101,9 +127,21 @@ Agents produce an edit decision list — shots with in/out points, VO segments w
 
 This makes evaluation cheap (most checks run on the plan, no pixels generated), makes the agent's reasoning diffable, and makes re-targeting to another platform a re-render rather than a re-generation.
 
-### 2.2 · Characters are assets, not generations
+### 2.2 · Characters are a fixture, backgrounds are the variable
 
-Each character is generated once as a sprite set — five poses plus a mouth-open variant — content-hashed, cached, then animated by arithmetic: a 5Hz talk cycle gated by audio amplitude, a sine bob at idle, scale pulses on emphasis, hard cuts on beats. Identity consistency becomes structural instead of probabilistic.
+**The cast is established once, outside the pipeline, and reused by every video. Backgrounds are generated fresh on every run.** That split is the core of the asset model, and it follows from the format catalog: no reel has more than three speakers, and a creator making fifty videos wants the same faces in all of them.
+
+**Setup — runs once, not per video.** The user asks for one to three characters, is shown candidates, picks or re-prompts until satisfied, and the accepted characters are drawn out to a full pose set and stored. Nine drawings per character — eight poses plus a mouth-open variant. From then on the roster is a fixture: video generation *references* characters, it never creates them. Changing a character later is a separate management action, deliberately outside the video flow.
+
+**At runtime**, characters are animated by arithmetic — a 5Hz talk cycle gated by audio amplitude, a sine bob at idle, scale pulses on emphasis, hard cuts on beats. Identity consistency becomes structural instead of probabilistic, and now across the whole channel rather than just within a reel.
+
+Three consequences worth naming:
+
+- **Character generation leaves the per-run budget entirely** — not as an accounting carve-out for cold archetypes, but because it genuinely happens somewhere else. Every run then costs the same, which makes sweep forecasting exact.
+- **The human is in the loop where visual judgment actually matters**, once, rather than never. This is not a gate and is not governed by the involvement dial — it happens before any run exists.
+- **The eval sweep gets a stable cast fixture**, seeded once. A hundred runs share three characters, so the denominator holds still while everything else varies.
+
+This gives the project two pre-established asset libraries with the same shape: the **music library**, scored offline, and the **cast roster**, generated at setup. Both are lookups at runtime. Both are prerequisites for a run. The only images generated during a video are backgrounds.
 
 **The cost consequence is the one that matters at a $100 ceiling: output frame rate is free.** Frames are composited by ffmpeg on CPU, so 24, 30 and 60fps cost exactly the same. Nothing is generated per frame, per second, or per shot. The only thing that costs money is a *distinct drawing*, and there are six per character, reused across every reel that casts the same archetype.
 
@@ -111,9 +149,18 @@ Each character is generated once as a sprite set — five poses plus a mouth-ope
 
 > **Frame duration is a floor on beat-alignment precision.** Cuts quantize to frame boundaries, so at 30fps a cut can sit ±16.7ms off its beat no matter how good the planner is. That is a quarter of the 60ms threshold — fine. Tighten the threshold below ~35ms and the frame rate becomes the limiting factor rather than the Showrunner, at which point the rule measures the encoder. 60fps halves the error if that headroom is ever needed, and costs only ffmpeg time.
 
-Sprites key on `(archetype, style, pose)` rather than on topic, so "a skeptic in flat vector" is drawn once and reused everywhere. Cache hit rate on an eval sweep lands near 95%, which is what makes hundreds of runs affordable.
+Because the roster is fixed, sprite reuse is total: a three-character roster is **27 drawings for every video the project will ever make**, which is what makes hundreds of runs affordable — and what makes a rich pose set free to ask for.
 
-**Backgrounds come from a library by default**, not from generation. Per-shot generated backgrounds are near-unique by construction and barely cache; they would have become the most expensive stage in the pipeline immediately after characters were optimised to nearly zero. Generation stays available behind a `--bespoke-bg` flag for the handful of reels a human actually watches.
+**Backgrounds are generated fresh on every run, and are the only images a run generates.** A background picked from a library cannot be *about* anything — a reel on the Taj Mahal would never show it. Since the cast is now a fixture, backgrounds are also where all the visual variety has to come from, so **deliberately no cross-run reuse**: two reels on the same topic should not look like the same video.
+
+The failed version of this was *per-shot* generation: 8–12 near-unique descriptions per reel. Two changes make it affordable without reintroducing sameness:
+
+- **A reel gets `bg_budget` distinct plates, default 3** — not one per shot. Both formats are single-location by construction, so the budget buys *subject* changes rather than room changes: what the characters are discussing, not where they are standing.
+- **The Showrunner emits a reusable `scene_id`**, and every shot in that location references it. Deduplication happens **within a reel only** — nine shots across two scenes cost two generations, not nine — and one wide plate per scene is cropped and panned per shot, which reads as different setups for free.
+
+`--bespoke-bg` now means the opposite of what it used to: it *lifts* the cap for the handful of reels a human actually watches, allowing genuine per-shot generation.
+
+> **This is the one place the design deliberately spends for variety rather than saving for cache.** Within-reel dedupe is continuity — the room must not change mid-conversation. Cross-run dedupe would be savings, and is refused on purpose.
 
 ### 2.3 · Gates sit where changes are cheap and consequences are expensive
 
@@ -200,10 +247,10 @@ Seven agents. Six make a video, one improves the other six. Each earns its place
 
 | # | Agent | Owns the decision | Loop | Repair inbox |
 |---|---|---|---|---|
-| 1 | [Brief](#41--brief-agent) | What kind of video this should be | Shallow | **None** — gated |
+| 1 | [Brief](#41--brief-agent) | Intent, format, tone — what kind of video this should be | Shallow | **None** — gated |
 | 2 | [Research](#42--research-agent) | What is true and where it came from | Deep | `grounding` |
 | 3 | [Showrunner](#43--showrunner) | What gets said, by whom, where cuts land | Shallow + Deep | **6 of 11 rules** |
-| 4 | [Casting](#44--casting-agent) | What the characters look like, consistently | Medium | `identity_drift` |
+| 4 | [Casting](#44--casting-agent) | What the scene looks like, and that the cast still matches the roster | Medium | `identity_drift` |
 | 5 | [Voice](#45--voice-agent) | How each line sounds and how long it really takes | **None** on hot path | `speaker_attribution` |
 | 6 | [Scoring](#46--scoring-agent) | The track, the grid, the drop, the ducking | None + Shallow | `music_ducking` · `loudness_spec` |
 | 7 | [Improvement](#47--improvement-agent) | Which knob to turn next, and why | Offline | n/a |
@@ -216,13 +263,15 @@ Seven agents. Six make a video, one improves the other six. Each earns its place
 
 ### 4.1 · Brief Agent
 
-**The producer taking the order.** You type "Voynich manuscript"; it decides 35 seconds, two-person debate, wry, flat-vector. Turns a vague topic into a spec sheet.
+**The producer taking the order.** You type "make a video about AI agents"; it proposes *Commentary · Debate · Wry · 45s*, with the cast, voices and visual direction already chosen. Turns a vague topic into a complete spec sheet.
+
+**It proposes a whole plan, not a questionnaire.** Every field is decided and shown as an editable chip — the user accepts the lot or changes any part of it. The involvement dial governs only whether Brief *additionally* interrupts to ask about its least-confident fields; the gate always shows everything regardless. There is no wizard, and no field is ever withheld pending an answer.
 
 | Slot | |
 |---|---|
 | **Input** | Topic string + `involvement: 0–10` |
 | **Output** | Brief document ([§6](#6--contracts-between-stages)) |
-| **Tools** | `format_catalog` · `topic_probe` · `duration_policy` |
+| **Tools** | `intent_catalog` · `format_catalog` · `topic_probe` · `duration_policy` |
 | **Loop depth** | Shallow — one probe, one decision call |
 | **Called when** | First, always |
 | **Repair inbox** | **None.** Gated, never repaired — a bad brief is a failed run, not a repaired one. |
@@ -268,7 +317,7 @@ reason: "cast_size 3 illegal for format debate (allows 2)"
 **✅ Locked**
 
 - **Claim bar = checkable assertions only.** Roughly 6–10 entries per reel. Small enough to actually read at Gate 2.
-- **Runs for every format including fiction, graded uniformly.** No `if factual` branch anywhere. A skit scoring low on grounding is accepted as real signal — softening it would make the pass rate mean two different things depending on the input.
+- **Runs for every intent including Comedy, graded uniformly.** No `if factual` branch anywhere. A Comedy reel scoring low on grounding is accepted as real signal — the intent sets how many beats get flagged `needs_fact`, so Research simply has little to source and costs ~$0. It is never skipped, and its output is never graded on a softer scale within an intent.
 - **Gemini grounded search over hand-rolled search + fetch.** Less code, same stack constraint. **Requires the recorder to persist returned text and `groundingMetadata` verbatim** — retrieval will not reproduce next week, and replay breaks without it.
 
 ---
@@ -298,68 +347,128 @@ reason: "cast_size 3 illegal for format debate (allows 2)"
 
 ### 4.4 · Casting Agent
 
-**The character designer.** Draws each character once in several poses and keeps Person 1 looking like Person 1 in every shot.
+**The set designer and continuity supervisor.** Character *design* is not its job — that happens once at setup, before any video exists. At runtime Casting resolves the cast from the roster, generates the backgrounds, and verifies that what came out still looks like who it should.
 
 | Slot | |
 |---|---|
-| **Input** | Brief cast list + EDL shot list |
-| **Output** | Sprite sets, backgrounds, cache manifest |
-| **Tools** | `imagen_generate` · `identity_distance` · `cache_lookup` |
-| **Loop depth** | Medium |
+| **Input** | Cast roster references + EDL shot list with `scene_id`s |
+| **Output** | Background plates, resolved sprite references, asset manifest |
+| **Tools** | `imagen_generate` · `identity_distance` · `roster_lookup` |
+| **Loop depth** | Medium — background generation and verification |
 | **Called when** | After Gate 2, in parallel with Voice |
 | **Repair inbox** | `identity_drift` → regenerate the **outlier pose only**, never the sprite set |
-| **Budget** | `$0.005` · **degrade** — ≈$0 warm; this cap is really an amortised allowance for cold archetypes |
-| **Failure mode** | A character drifts and the cache silently misses, turning a $0 stage into the most expensive one. |
+| **Budget** | ⬜ re-size — sprites are a lookup; `bg_budget` plates are the real cost · **degrade** |
+| **Failure mode** | Backgrounds that don't match what the script describes, or a pose that drifts off its stored reference. |
 
-**✅ Cache key: archetype by default, override when it matters**
+#### 4.4.1 · Cast setup — once, outside the pipeline
 
-```
-default   key = hash(archetype, style, pose)
-          "skeptic" + flat_vector → sprite_a1b2
-          reused across voynich, bigfoot, roswell, bermuda…
-
-override  brief sets distinct: true on a character
-          key = hash(archetype, style, pose, descriptor, seed)
-          fresh generation, topic-specific look
-```
-
-This is the decision that makes a 100-run eval sweep affordable. The sweep runs all-default, so a hundred topics share a handful of archetypes and the hit rate lands near 95%. The override exists for the one reel where a character genuinely has to look like a specific person — and because it is opt-in, it can never quietly wreck sweep economics.
-
-> Put **cache hit rate on the dashboard from day one.** It is the single largest lever on cost per reel, and a regression here is invisible in every other metric.
-
-**✅ Poses: fixed core, bounded extras**
+No format in the catalog exceeds three speakers, so a roster of three covers every video the system can make. Establishing that roster is a **separate flow that runs once**, not a stage inside a run.
 
 ```
-core     [talking, listening, reacting, gesturing, idle]
-         every character, always, cached and shared
-
-extras   max 2 per reel, requested by the Showrunner
-         for a specific moment — facepalm, pointing, …
+SETUP  (once per project)              RUN  (every video)
+────────────────────────────           ──────────────────────
+1. user requests 1–3 characters        Brief assigns roles from
+2. pick from candidates, or                the existing roster
+   re-prompt and pick again           Casting resolves refs — no
+3. accepted → full pose set               character generation at all
+4. stored to roster
 ```
 
-The core set keeps the EDL validatable against a fixed enum *before any pixel is generated* — a free QC check on the plan. Extras stay bounded so marginal cost per reel is knowable in advance rather than a function of how expressive the Showrunner felt.
+**✅ Selection is two-phase, so rejection is cheap.**
 
-**✅ Animation: 6 sprites per character, moved by arithmetic**
-
-Nothing is animated by a model. Five poses plus one mouth-open variant, cached forever, moved by the compositor:
+A candidate costs **one drawing**, not nine. Only an accepted character gets drawn out to the full set.
 
 ```
-sprites per character = 5 core poses + 1 mouth-open = 6   ← the only cost
+phase 1   generate 3 candidate portraits per slot        3 images
+          user picks one — or types a description
+          and gets 3 more                                3 images per retry
 
-  talking  →  alternate base/mouth-open, gated by audio amplitude
+phase 2   accepted portrait → 8 poses + mouth-open       9 images
+          seeded from the portrait so the face holds
+```
+
+A user who settles immediately spends 12 images per character. A user who re-prompts twice spends 18. The alternative — generating the full set per candidate — would have cost 27 for the same two rejections, and the rejected work is pure waste.
+
+⬜ **Open:** does re-prompting replace all three candidates, or keep the ones the user liked and refresh the rest? Keeping the liked ones is friendlier and no more expensive.
+
+- **The user iterates until satisfied.** Character design is visual judgment a model should not finalise alone, and it is worth a human's time exactly once.
+- **This is not a gate and is not governed by the involvement dial.** Gates sit inside a run; this happens before any run exists. The dial controls interruption during production, not project setup.
+- **Changing a character later is a separate management action** — deliberately outside the video flow, so no run can silently alter the cast it is using.
+- **The eval sweep uses a seeded fixture roster.** A hundred runs share three characters, holding the denominator still while topic and format vary.
+
+**Consequences.** Character generation leaves the per-run budget outright — not as a carve-out for cold archetypes, but because it genuinely happens elsewhere. Every run then costs the same, which makes sweep forecasting exact. And identity consistency now holds across the entire channel, not merely within a reel.
+
+> **What this replaces.** The earlier design generated sprites on demand, keyed on `hash(archetype, style, pose)`, with an opt-in `distinct: true` for bespoke looks and a ~95% cache hit rate across a sweep. A fixed roster reaches the same place more simply: the hit rate is 100% by construction, and the `distinct` flag disappears because every character is bespoke and reviewed. The cost carve-out for cold archetypes disappears with it.
+
+#### 4.4.2 · Poses: one closed set of eight
+
+Eight poses per character, plus a mouth-open variant of `talking`. The old five-pose set was sized for a world where each drawing cost money on every run; with a fixed roster that constraint is gone, and a richer set is what keeps a 35-second two-hander from looking repetitive.
+
+```
+speaking     talking          + talking_open  ← the 5Hz mouth cycle
+listening    listening          neutral, attentive
+             nodding            active agreement
+             skeptical          brow raised, arms crossed
+reacting     reacting           surprise, the turn
+             laughing           for wry and comic registers
+emphasis     gesturing          making a point
+default      idle               sine bob
+```
+
+**`nodding` and `skeptical` are the two that earn their place immediately.** A debate is agreement and disagreement, and the old set could express neither — the non-speaking character had exactly one face for the entire reel.
+
+**The extras mechanism is removed.** With eight core poses there is nothing a Showrunner-requested extra would add that justifies a second, variable-size enum. The pose list is now closed and identical for every character, which is what keeps the EDL validatable against a fixed enum *before any pixel is generated*.
+
+**✅ Pose is derived, not chosen.** The dialogue line already carries `delivery: { emotion, emphasis[] }`. Pose selection is a deterministic lookup from that field, not a Showrunner decision:
+
+```
+emotion: dry        → skeptical
+emotion: excited    → gesturing
+emotion: amused     → laughing
+non-speaking char   → nodding | skeptical | listening, from the
+                      emotion of the line being spoken at them
+```
+
+Free, reproducible, and it keeps a decision that appears in every single frame out of a model's hands — consistent with everything else in [§5](#5--deliberately-not-agents). ⬜ The emotion→pose table itself is a good Improvement Agent mutation target.
+
+#### 4.4.3 · Animation: 9 sprites per character, moved by arithmetic
+
+Nothing is animated by a model. Eight poses plus one mouth-open variant, stored once, moved by the compositor:
+
+```
+sprites per character = 8 poses + 1 mouth-open = 9   ← generated at setup
+
+  talking  →  alternate talking/talking_open, gated by audio amplitude
   idle     →  sine bob
   emphasis →  scale pulse
-  beats    →  hard cut
+  beats    →  hard cut between poses
 ```
 
-**✅ Backgrounds: library by default, generation behind a flag**
+A three-character roster is **27 drawings, generated once, for every video the project will ever make.** Pose changes on beats are free, so a richer set buys visible variety at zero marginal cost — the one place in this architecture where more is genuinely cheaper than clever.
+
+#### 4.4.4 · Backgrounds: the only images a run generates
 
 ```
-default          library, picked by id          $0
---bespoke-bg     per-shot generation            the three demo reels
+default          generate, capped at brief.params.bg_budget (3)
+                 dedupe WITHIN a reel on scene_id
+                 NO reuse across runs — variety is the point
+
+--bespoke-bg     lifts the cap — true per-shot generation, demo reels only
 ```
 
-> **A side benefit worth noticing.** With a library, backgrounds cannot drift — nothing generates them. The open question about extending `identity_drift` to background groups disappears on the default path, and only applies under the flag, where you are watching the output by hand anyway.
+The Showrunner assigns a `scene_id` per location and every shot in that location references it. Deduplication happens inside a reel only:
+
+```
+sh_01 … sh_04   scene_id: sc_study    → 1 plate
+sh_05 … sh_09   scene_id: sc_exterior → 1 plate
+                                        2 generations, not 9
+```
+
+One wide plate per scene, cropped and panned per shot, reads as several setups for free.
+
+**Cross-run reuse is refused on purpose.** With the cast fixed, backgrounds carry all of a reel's visual identity — two videos on the same topic must not look like the same video. Within-reel dedupe is continuity (the room cannot change mid-conversation); cross-run dedupe would be savings, and is declined.
+
+> **Backgrounds can drift, and now nothing prevents it.** Two reels on the same topic will produce different plates by design. ⬜ Whether `identity_drift` should extend to background plates *within* a reel — the study in shot 1 matching the study in shot 4 — is a live question. The one-plate-per-scene rule makes it mostly moot, since those shots are crops of the same image.
 
 ---
 
@@ -507,25 +616,29 @@ Fix these four shapes early. **Retrofitting multi-speaker support into a single-
 **Brief** — output of stage 1
 
 ```yaml
-format: two_host_debate      # from the closed catalog
-params:                      # tuned within the catalog's legal range
+intent: commentary           # explainer | comedy | commentary — closed
+format: debate               # monologue | debate — closed
+tone:   wry                  # product field, no sweep of its own
+params:                      # defaults from intent, tuned within legal range
   cast_size:     2
   turn_len_s:    [3, 9]      # catalog allows [4, 12]
   hook_budget_s: 2.5
   max_hold_s:    2.0         # QC reads its thresholds from here
+  bg_budget:     3           # distinct generated backgrounds, catalog allows [1, 4]
 duration_s: 35
-cast:
-  - id: skeptic
-    voice:    { id, pace, pitch, style }   # assigned here, at cast time
-    identity: { refs[], descriptor, seed, distinct: false }
-    persona:  { role, verbosity, tics }
-  - id: enthusiast
+cast:                        # roles assigned to EXISTING roster members
+  - role: skeptic
+    character_id: ch_02      # ← from the stored roster, never generated here
+    voice:   { id, pace, pitch, style }
+    persona: { verbosity, tics }
+  - role: enthusiast
+    character_id: ch_01
     # …
-tone: wry
 visual: flat_vector · muted
 music_intent: { mood, drop_at_s }   # drop_at_s is a selection HINT, not a constraint
-confidence: { format: 0.85, tone: 0.45, … }   # drives the involvement dial
-assumptions: [ ]   # editable chips
+confidence: { intent: 0.72, format: 0.85, tone: 0.45, … }   # every field is scored
+assumptions: [ ]   # editable chips — the full proposed plan, all of it changeable
+applicable_rules: [ … ]   # derived from intent+format; the pass-rate denominator
 brief_invalid: false   # schema check runs, records, never blocks
 ```
 
@@ -552,13 +665,13 @@ on_beat: true
 beat_offset_ms: 18
 layers:
   - { type: character, id: skeptic, pose: talking, x, y, scale }
-  - { type: bg, id: bg_library_07 }        # library by default
+  - { type: bg, scene_id: sc_study, crop: [0.1, 0.0, 0.8, 1.0] }
   - { type: caption, span: [12.4, 16.0] }
 intensity: 0.72
 hold_s: 0.4        # absorbed drift — freeze on the last frame
 ```
 
-Poses come from the fixed core set — `talking · listening · reacting · gesturing · idle` — plus at most two Showrunner-requested extras per reel. The fixed core is what lets the EDL be validated against an enum *before any pixel is generated*.
+Poses come from one closed set of eight — `talking · listening · nodding · skeptical · reacting · laughing · gesturing · idle` — identical for every character, with no per-reel extras. `pose` is not written by the Showrunner; it is derived from the line's `delivery.emotion` by lookup. The closed enum is what lets the EDL be validated *before any pixel is generated*.
 
 **Violation** — output of stage 8
 
@@ -578,7 +691,7 @@ round: 1
 
 ## 7 · QC rules and repair routing
 
-The economics of this table are the economics of the project. **Nine of the eleven rules are pure computation**, which is what makes a 100-run sweep cost cents instead of dollars.
+The economics of this table are the economics of the project. **Nine of the eleven rules are pure computation**, which is what makes a 120-run sweep cost cents instead of dollars.
 
 | Rule | Check | Threshold from | Cost | Routes back to |
 |---|---|---|---|---|
@@ -596,7 +709,21 @@ The economics of this table are the economics of the project. **Nine of the elev
 
 > ⬜ **`beat_alignment` currently has two claimed owners** and must be resolved before the router is written. The rule table assigns it to the Showrunner; Scoring's repair inbox claims `beat_offset → reselect`. **Proposed resolution, unratified:** a single off-beat cut routes to the Showrunner to retime; *systemic* failure (> ⅓ of shots off-grid) routes to Scoring to reselect the track. Until ratified, the router has an ambiguous entry.
 
-**Thresholds come from the brief, not from constants.** Because Brief tunes format parameters per topic, the rules must read `brief.params`. Write them that way from the first rule.
+**Thresholds come from the brief, not from constants.** Because Brief tunes parameters per topic, the rules must read `brief.params`. Write them that way from the first rule.
+
+### The denominator is applicable rules, not eleven
+
+Not every rule applies to every configuration. A monologue has one character, so `speaker_attribution`, `screen_time_balance` and `identity_drift` have nothing to measure — that reel is scored **8 of 8, not 8 of 11.**
+
+`applicable_rules` is derived from `intent` + `format` at brief time and recorded on the run. Pass rate is then a *rate*, which is what keeps a 1-cast monologue comparable to a 2-cast debate instead of penalising the monologue for rules it could never fail.
+
+| Rule | Applies when |
+|---|---|
+| `speaker_attribution` · `screen_time_balance` | `cast_size ≥ 2` |
+| `identity_drift` | ⬜ under review — sprites are stored and never regenerated, so a character may no longer be able to drift |
+| everything else | always |
+
+**No stage is ever skipped, only emptied.** A Comedy reel does not bypass Research: the outline flags few or no beats `needs_fact`, Research runs, sources nothing, and costs ~$0. This keeps one code path, one trajectory shape, and comparable telemetry across every configuration — and it preserves the Aug 5 decision that Research is graded uniformly with no `if factual` branch anywhere.
 
 **The two model-graded rules are pinned and never mutable.** 🔒 If the Improvement Agent can reach a grader, the cheapest way to raise the pass rate is to make the judge lenient.
 
@@ -710,7 +837,7 @@ No phase pools. Every stage has a ceiling, the harness checks it *before* spendi
 | 3a · Showrunner outline | `$0.010` | **abort** | One call over a small context. Still cheap enough to restart. |
 | 2 · Research | `$0.020` | **degrade** | ~4 grounded calls, the priciest text stage. Ship fewer claims and let `grounding` fail honestly. |
 | 3b · Showrunner script | `$0.025` | **degrade** | Deep validator loop, largest context, most retries. The most expensive stage — and where extra spend most reliably buys quality. |
-| 4 · Casting | `$0.005` | **degrade** | ≈$0 warm. An amortised allowance for cold archetypes. |
+| 4 · Casting | ⬜ `$0.005` → **needs re-sizing** | **degrade** | Sprites are now a roster lookup at $0. The cap covers `bg_budget` background plates — ~3 images **every run**, with no cross-run reuse by design. This is the only per-run image cost, and this cap was written when it was zero. |
 | 5 · Voice | `$0.015` | **degrade** | ~35s of TTS. Nearly fixed — barely varies by run. |
 | 6b · Scoring envelope | `$0.005` | **degrade** | One call, or deterministic. |
 | 8 · QC graders | `$0.010` | **abort** | Two Flash calls. Never degrade a grader. |
@@ -725,7 +852,11 @@ No phase pools. Every stage has a ceiling, the harness checks it *before* spendi
 
 **Repair is a pool, not a per-round cap.** Round costs vary a lot — a resynth is trivial, a script rewrite is not. A shared pool correctly allows three cheap repairs or stops after one expensive one.
 
-> **Cold-start is a separate line.** The first run using a new archetype generates 6 sprites and blows the Casting cap by design. Track that as a **one-time per-archetype cost, outside the per-run budget** — otherwise the first run of every sweep aborts and you spend a morning debugging a working system.
+> ⬜ **Background plates are the whole image cost now, and they are not priced into this table yet.** `bg_budget` generations on every run, with no cross-run reuse by design. Confirm Imagen's per-image rate, then re-derive the Casting cap and the run total together.
+>
+> The constraint to hold is the sweep count: at `$0.110` a 120-run sweep is ~$13 and the credit buys about seven of them. Past roughly `$0.20` per reel you get four sweeps, and past `$0.30` the improvement loop has nothing to prove itself against — which costs the headline result. **If the arithmetic forces a choice, cut `bg_budget` to 1–2 before cutting sweeps.** A reel with one background still evaluates the planner correctly; a project with two sweeps does not.
+
+> **Cost per run is now flat.** With the cast established at setup, no run generates a character, so the old cold-archetype carve-out is gone — every run costs the same, and sweep totals are exact rather than estimated. Roster generation is a **one-time project cost** accounted separately, like scoring the music library.
 
 ### Replay is a budget instrument
 
@@ -753,7 +884,24 @@ flowchart LR
     MU --> RN
 ```
 
-A 100-scenario sweep costs roughly **$11** at the current cap, which buys enough sweeps for the improvement loop to prove something. Above ~$0.30/reel you get two sweeps and the loop has nothing to prove itself against — which costs you the headline result.
+### The sweep grid is one-dimensional on purpose
+
+Three intents × two formats = **six cells**, at ~20 runs each = **120 runs ≈ $13 a sweep.** That fits the credit several times over.
+
+```
+                  MONOLOGUE      DEBATE
+  Explainer          20            20
+  Comedy             20            20
+  Commentary         20            20
+```
+
+**Tone is not swept.** It is a product field that does not move whether cuts land on beats, and adding it as a third axis would multiply six cells into thirty for no measurable return.
+
+> **Interaction effects are explicitly out of scope.** Six cells at twenty runs gives main effects — *does Comedy fail more than Explainer, does Debate fail more than Monologue*. It does not have the power to answer *does Comedy fail differently in Debate than in Monologue*. Twenty Bernoulli trials still carries roughly ±20 points of confidence interval, so read the grid for direction, not for precision, and say so in the writeup.
+>
+> The alternative that was rejected: a full Intent × Format × Tone cross-product is 150 cells, and at twenty runs each costs about **$330 against $100 of credit.** The abstraction was affordable; measuring it was not.
+
+A 120-run sweep costs roughly **$13** at the current cap, which buys enough sweeps for the improvement loop to prove something. Above ~$0.30/reel you get two sweeps and the loop has nothing to prove itself against — which costs you the headline result.
 
 ---
 
@@ -803,8 +951,8 @@ The involvement dial is deliberately absent from that list. At `involvement: 0` 
 | Aug 6 | Showrunner | One agent, two passes — not two agents | Half the prompt surface for the Improvement Agent to search. |
 | Aug 6 | Showrunner | Retime is deterministic arithmetic, no model call | Free and reproducible. The repair loop is the escalation path. |
 | Aug 6 | **System** | **Scoring moves ahead of Gate 2** | The Showrunner cuts against a real beat grid. **Trade: Gate 2 no longer precedes all asset spend.** |
-| Aug 6 | Casting | Cache key = archetype + style, with opt-in `distinct: true` | ~95% hit rate on a sweep. The override can't wreck sweep economics because it's opt-in. |
-| Aug 6 | Casting | 5 core poses for everyone, max 2 Showrunner-requested extras | Core keeps the EDL validatable against a fixed enum for free. |
+| Aug 6 | Casting | ~~Cache key = archetype + style, with opt-in `distinct: true`~~ | **Superseded Aug 8** by the fixed roster. |
+| Aug 6 | Casting | ~~5 core poses for everyone, max 2 Showrunner-requested extras~~ | **Superseded Aug 8** — 8 poses, no extras. |
 | Aug 6 | Voice | Deterministic on the hot path; model call only on escalation | Reproducible and free to replay, with one prompt left to tune. |
 | Aug 6 | Voice | Voice ids assigned by Brief at cast time | Locked before planning, visible at Gate 1. Leaves a distinctness gap — filed. |
 | Aug 6 | Voice | Absorption ladder: hold/transition under `max_hold_s`, else escalate | Most drift never reaches the repair loop. `max_hold_s` default 2.0. |
@@ -818,9 +966,31 @@ The involvement dial is deliberately absent from that list. At `involvement: 0` 
 | Aug 6 | Improvement | One mutation per sweep, aimed at the highest-frequency violation | Strict A/B is what lets the writeup claim *this change caused this gain*. |
 | Aug 6 | Improvement | Auto-promote iff pass rate ↑, cost not ↑, no rule regressed >2% | Runs unattended overnight, with a floor against trading cost for aggregate gain. |
 | Aug 6 | Improvement | Reads MCP aggregates + best/worst trajectory pair | Bounded context, most of the diagnostic value of reading failure logs. |
-| Aug 7 | Casting | 6 sprites per character — 5 poses + 1 mouth-open — moved by arithmetic | Output FPS is free; only distinct drawings cost. |
+| Aug 7 | Casting | ~~6 sprites per character — 5 poses + 1 mouth-open~~ | **Superseded Aug 8** — 9 sprites. Arithmetic animation unchanged. |
 | Aug 7 | Compositor | **30fps**, 3-frame mouth hold (5Hz cycle), pinned in config, recorded per run | Divides evenly into the syllable band. Sets a ±16.7ms floor on beat precision. |
-| Aug 7 | Casting | **Backgrounds revert to a library**; per-shot generation behind `--bespoke-bg` | The $100 ceiling. Per-shot descriptions barely cache. |
+| Aug 7 | Casting | ~~Backgrounds revert to a library; per-shot generation behind `--bespoke-bg`~~ | **Reversed Aug 8.** |
+| Aug 8 | **Casting** | **Backgrounds are generated, not library-picked** | A library background cannot be *about* the topic — a Taj Mahal reel would never show the Taj Mahal. Owner's call, made against the cost argument. |
+| Aug 8 | Casting | Cost controlled by the **key**, not by refusing to generate: `bg_budget` of 3 per reel, cache on `hash(scene_id, style)`, one wide plate per scene cropped per shot | Turns 8–12 near-unique generations into ~3 with reuse. `--bespoke-bg` inverts to mean *uncapped*. |
+| Aug 8 | Showrunner | Emits a reusable `scene_id` per location; shots in a scene share it | Dedupes plates within a reel without dulling variety across reels. |
+| Aug 8 | **Casting** | **Cast is a fixture established once at setup, not generated per run** | No format exceeds 3 speakers, so a roster of 3 covers everything. Human reviews and iterates once, where visual judgment actually matters. |
+| Aug 8 | Casting | Character generation leaves the per-run budget entirely | Not a carve-out any more — it genuinely happens elsewhere. Every run now costs the same, so sweep forecasting is exact. |
+| Aug 8 | Casting | `distinct: true` and archetype cache keys are **removed** | Every character is bespoke and reviewed, so hit rate is 100% by construction and the override has nothing left to override. |
+| Aug 8 | Casting | Changing a character is a management action **outside** the video flow | No run can silently alter the cast it is using. |
+| Aug 8 | Casting | **No cross-run background reuse** — variety is the point | With the cast fixed, backgrounds carry all of a reel's visual identity. Within-reel dedupe is continuity; cross-run dedupe would be sameness. |
+| Aug 8 | Eval | Sweep uses a seeded fixture roster of 3 | Holds the cast denominator still while topic and format vary. |
+| Aug 8 | **Casting** | **Character selection is two-phase: candidate portraits, then the full pose set** | A rejection costs 1 drawing instead of 9. Re-prompting stays affordable, so the user actually iterates. |
+| Aug 8 | Casting | **8 poses per character + mouth-open variant = 9 sprites** | The 5-pose set was sized for per-run generation cost, which no longer exists. `nodding` and `skeptical` give the non-speaking character a face. |
+| Aug 8 | Casting | Showrunner-requested pose **extras are removed** | Eight closed poses make a second variable-size enum pointless. |
+| Aug 8 | Compositor | **Pose is derived from `delivery.emotion` by lookup, not chosen by a model** | Appears in every frame, so it belongs with the other deterministic decisions. The mapping table is a clean mutation target. |
+| Aug 8 | **Brief** | **Intent becomes a first-class axis: `explainer · comedy · commentary`, closed** | A vague prompt admits many different videos. Each intent puts `grounding` in a different regime, which is what makes three worth having. |
+| Aug 8 | Brief | Education / News / Informational **merge into Explainer** | In a 45s reel they score identically on all eleven rules. Separating them spends sweep budget to discover they are one cell. |
+| Aug 8 | Brief | Intent sets **parameter defaults**, not just a label | Reuses the existing `brief.params` mechanism, so QC reads intent-derived thresholds for free. |
+| Aug 8 | Brief | **Format catalog cut 5 → 2: monologue, debate** | Podcast and Interview were Debate variants; Skit is now covered by Comedy-as-intent. Preserves the 1-vs-2 cast curve at 40% of the surface. |
+| Aug 8 | Brief | Tone is a product field with **no sweep of its own** | It does not change whether cuts land on beats. |
+| Aug 8 | **QC** | **Denominator is `applicable_rules`, derived from intent+format, recorded per run** | A 1-cast monologue scores 8/8, not 8/11. Comparing rates keeps configurations comparable. |
+| Aug 8 | 🔒 **Eval** | **Pass rate is reported per intent and never pooled** | Intents carry different thresholds and Brief picks the intent — a pooled number hands Brief a lever on its own grade. Same class of failure as a mutable grader. |
+| Aug 8 | Eval | Sweep grid is **6 cells × 20 runs ≈ $13**; interactions out of scope | The full Intent × Format × Tone cross-product is 150 cells ≈ $330 against $100 of credit. |
+| Aug 8 | System | **No stage is skipped by configuration — only emptied** | A Comedy reel flags no `needs_fact` beats, so Research runs and sources nothing. One code path, one trajectory shape, comparable telemetry. |
 | Aug 7 | **System** | **Hard per-stage dollar caps, checked before execution; no phase pools** | Guards against one runaway trajectory at 3am. Run total `$0.110`. |
 | Aug 7 | System | Breach behaviour differs by stage: cheap-and-early **abort**, expensive-and-late **degrade** | Aborting a $0.005 Brief is free; aborting a $0.025 script pass discards everything spent. |
 | Aug 7 | System | **QC graders never degrade** — out of budget voids the run | The pass rate is the product. A partial judge is worse than no judge. |
@@ -854,7 +1024,7 @@ None are architectural — every agent's shape is locked. These are tactical, an
 | Brief | Step cap — how many calls before abort *(dollar cap set)* |
 | Research | Verification pass — confirm a claim appears in its cited source, or trust the grounding metadata? · What happens to a beat it can't source — drop, soften, or flag? · Does `contradiction_check` survive at this ledger size? · Step cap |
 | Showrunner | One shot per line, or can a line span shots? · On repair, does it see the full prior script or only the violating span? · Step cap |
-| Casting | What is "canonical" for drift measurement — the first generated pose, or a dedicated reference render? · How many backgrounds in the library, hand-made or generated once offline? |
+| Casting | ▲ Price a background plate and re-derive the Casting cap + run total *(see [§9](#9--cost-model))* · Where does the roster live, and how does a run record which roster version it used? · If a script wants a pose the roster lacks — fall back to nearest core, or pause for setup? · Does `identity_drift` still earn its place when sprites are stored and never regenerated? · Is `bg_budget` per reel or per scene-change? |
 | Voice | Voice distinctness check at cast time — Brief's job, in or out? · Loudness: normalize per segment, or only on the final mix? · Step cap |
 | Scoring | Minimum track count for mood coverage? · If no track's drop is near the hint — reselect, or offset the track's start? · Does `6b` get a model call, or is `envelope_fit` deterministic on VO density? |
 | Improvement | Sweep size — how many scenarios before a pass-rate delta is trustworthy? · Where do promoted configs live? · Who stops a sweep mid-flight, and on what signal? |
