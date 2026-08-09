@@ -1,11 +1,14 @@
 """Stage implementations.
 
-Model calls are STUBBED — deterministic fixtures standing in for Gemini so the
-graph runs end to end today with no credentials. Each stub still charges its
-stage's budget and writes a model_call to the trajectory, so the harness is
-exercised for real even though the model is not.
+Every model call goes through `_call`, which hits Gemini when credentials exist
+and falls back to a deterministic fixture when they do not. The path through the
+harness is identical either way — budget checked before execution, verbatim
+payload written to the trajectory — so a credential-less run still exercises
+everything except the model itself.
 
-The compositor and the QC rules are NOT stubbed. They are the code proven by
+Set GOOGLE_CLOUD_PROJECT (Vertex) or GOOGLE_API_KEY (AI Studio) to go live.
+
+The compositor and the QC rules are never stubbed. They are the code proven by
 the spike, wired in as-is.
 """
 
@@ -18,6 +21,7 @@ import sys
 
 import yaml
 
+from harness.model import get_client
 from harness.node import Ctx
 from harness.state import Production
 
@@ -27,53 +31,98 @@ sys.path.insert(0, str(ROOT / "spike"))
 
 import render as spike  # noqa: E402  — the proven compositor
 
+MODEL = get_client()
 
-def _fake_response(stage: str, payload: dict) -> dict:
-    """Shaped like a provider response so the recorder stores something realistic."""
-    return {
-        "_stub": True,
-        "model": "gemini-stub",
-        "candidates": [{"content": {"parts": [{"text": json.dumps(payload)}]}}],
-        "usageMetadata": {"promptTokenCount": 0, "candidatesTokenCount": 0},
-    }
+
+def _call(ctx: Ctx, prompt: str, *, stub: dict, fallback_cost: float,
+          system: str | None = None, grounded: bool = False) -> dict:
+    """One model call: real if credentials exist, the stub fixture if not.
+
+    Either way the recorder sees a model_call with the verbatim payload, so the
+    harness is exercised identically and a stubbed run stays replayable.
+    """
+    resp = MODEL.generate(prompt, stub=stub, system=system, grounded=grounded)
+    cost = resp.cost if not resp.stub else fallback_cost
+    ctx.spend(cost, {"prompt": prompt, "system": system, "grounded": grounded}, resp.raw)
+
+    if resp.grounding:
+        ctx.note(f"grounding: {len(resp.grounding)} metadata block(s) recorded verbatim")
+
+    try:
+        return resp.json()
+    except (ValueError, TypeError):
+        ctx.note("response was not JSON — falling back to the stub shape")
+        return stub
 
 
 # ----------------------------------------------------------------- planning
+
+
+BRIEF_SYSTEM = """You are the Brief agent for a short-form video system.
+Turn a vague topic into a complete spec sheet. Decide every field — never ask.
+Score your own confidence per field; low-confidence fields become questions
+the gate may raise, but you still commit to a value.
+
+intent  MUST be one of: explainer | comedy | commentary
+format  MUST be one of: monologue (1 cast) | debate (2 cast)
+The catalogs are closed. Do not invent a fourth intent or a third format.
+
+Return JSON only, matching the shape you are given."""
+
+BRIEF_STUB = {
+    "intent": "commentary",
+    "format": "debate",
+    "tone": "wry",
+    "duration_s": 15.0,
+    "params": {"cast_size": 2, "turn_len_s": [3, 9], "beat_tolerance_ms": 60,
+               "max_hold_s": 2.0, "bg_budget": 2},
+    "confidence": {"intent": 0.72, "format": 0.85, "tone": 0.45},
+    "assumptions": ["tone: wry (not asked — confidence 0.45)"],
+}
+
+# Cast is assigned from the stored roster, never invented by the model.
+ROSTER_CAST = [
+    {"role": "skeptic", "character_id": "ch_01", "x": 0.28},
+    {"role": "enthusiast", "character_id": "ch_02", "x": 0.72},
+]
 
 
 def brief(state: Production, ctx: Ctx) -> dict:
     topic = state["topic"]
     probe = ctx.tool("topic_probe", topic=topic)
 
-    out = {
-        "intent": "commentary",
-        "format": "debate",
-        "tone": "wry",
-        "duration_s": 15.0,
-        "params": {
-            "cast_size": 2,
-            "turn_len_s": [3, 9],
-            "beat_tolerance_ms": 60,
-            "max_hold_s": 2.0,
-            "bg_budget": 2,
-        },
-        "cast": [
-            {"role": "skeptic", "character_id": "ch_01", "x": 0.28},
-            {"role": "enthusiast", "character_id": "ch_02", "x": 0.72},
-        ],
-        "confidence": {"intent": 0.72, "format": 0.85, "tone": 0.45},
-        "assumptions": ["tone: wry (not asked — confidence 0.45)"],
-        "brief_invalid": False,
-        "probe": probe,
-    }
-    ctx.spend(0.004, {"stage": "brief", "topic": topic}, _fake_response("brief", out))
+    out = _call(
+        ctx,
+        f"Topic: {topic}\n\nProbe: {json.dumps(probe)}\n\n"
+        f"Return JSON with exactly these keys: {sorted(BRIEF_STUB)}",
+        system=BRIEF_SYSTEM,
+        stub=BRIEF_STUB,
+        fallback_cost=0.004,
+    )
+
+    # The catalogs are closed, so the schema check runs here — records, never blocks.
+    invalid = []
+    if out.get("intent") not in ("explainer", "comedy", "commentary"):
+        invalid.append(f"intent {out.get('intent')!r} not in catalog")
+    if out.get("format") not in ("monologue", "debate"):
+        invalid.append(f"format {out.get('format')!r} not in catalog")
+
+    cast_size = 1 if out.get("format") == "monologue" else 2
+    out.setdefault("params", {})["cast_size"] = cast_size
+    out["cast"] = ROSTER_CAST[:cast_size]
+    out["probe"] = probe
+    out["brief_invalid"] = bool(invalid)
+    if invalid:
+        out["invalid_reason"] = invalid
+        ctx.note(f"brief_invalid: {invalid} — recorded, not blocking")
 
     rules = ["beat_alignment", "duration_adherence"]
-    if out["params"]["cast_size"] >= 2:
+    if cast_size >= 2:
         rules += ["speaker_attribution", "screen_time_balance"]
 
     return {"brief": out, "applicable_rules": sorted(rules),
-            "log": [f"brief: {out['intent']} · {out['format']} · {out['tone']}"]}
+            "log": [f"brief: {out['intent']} · {out['format']} · {out['tone']}"
+                    f"{' [INVALID]' if invalid else ''}"]}
 
 
 def scoring_select(state: Production, ctx: Ctx) -> dict:
@@ -95,7 +144,9 @@ def outline(state: Production, ctx: Ctx) -> dict:
         ],
         "turn_at_s": drop,
     }
-    ctx.spend(0.008, {"stage": "outline", "drop_s": drop}, _fake_response("outline", out))
+    out = _call(ctx, f"Beat grid drop at {drop}s. Structure 4 beats, turn on the drop. "
+                     f"Flag beats needing a checkable fact.",
+                stub=out, fallback_cost=0.008)
     flagged = sum(b["needs_fact"] for b in out["beats"])
     return {"outline": out, "log": [f"outline: 4 beats, turn on drop, {flagged} need facts"]}
 
@@ -112,8 +163,10 @@ def research(state: Production, ctx: Ctx) -> dict:
          "source": "https://example.invalid/stub"}
         for i, b in enumerate(flagged, 1)
     ]
-    ctx.spend(0.017, {"stage": "research", "beats": [b["id"] for b in flagged]},
-              _fake_response("research", {"claims": claims}))
+    got = _call(ctx, f"Source these beats with checkable claims: "
+                     f"{[b['id'] for b in flagged]}",
+                stub={"claims": claims}, fallback_cost=0.017, grounded=True)
+    claims = got.get("claims", claims)
     return {"claims": claims, "log": [f"research: {len(claims)} claims for {len(flagged)} beats"]}
 
 
@@ -121,8 +174,8 @@ def script(state: Production, ctx: Ctx) -> dict:
     """Stub: loads the hand-written EDL from the spike, including its planted 80ms error."""
     edl = yaml.safe_load((ROOT / "spike" / "demo.edl.yaml").read_text())
     edl["shots"].sort(key=lambda s: s["in_s"])
-    ctx.spend(0.023, {"stage": "script", "claims": len(state.get("claims", []))},
-              _fake_response("script", {"shots": len(edl["shots"])}))
+    _call(ctx, f"Write dialogue for {len(edl['shots'])} shots on the beat grid.",
+          stub={"shots": len(edl["shots"])}, fallback_cost=0.023)
     return {"edl": edl, "script": {"lines": len(edl["shots"])},
             "log": [f"script: {len(edl['shots'])} shots on the grid"]}
 
@@ -140,7 +193,8 @@ def casting(state: Production, ctx: Ctx) -> dict:
 
     roster = ctx.tool("roster_lookup", character_ids=[c["character_id"] for c in state["brief"]["cast"]])
     plates = ctx.tool("generate_plates", scene_ids=scenes)
-    ctx.spend(0.003, {"stage": "casting", "scenes": scenes}, _fake_response("casting", {"plates": plates}))
+    _call(ctx, f"Describe background plates for scenes {scenes}.",
+          stub={"plates": plates}, fallback_cost=0.003)
 
     return {"assets": {"sprites": roster, "plates": plates},
             "log": [f"casting: {roster['n_sprites']} sprites (lookup, $0), "
@@ -149,14 +203,13 @@ def casting(state: Production, ctx: Ctx) -> dict:
 
 def voice(state: Production, ctx: Ctx) -> dict:
     spans = ctx.tool("measure_vo", path=str(ASSETS / "fixtures" / "vo.wav"))
-    ctx.spend(0.012, {"stage": "voice", "n_shots": len(state["edl"]["shots"])},
-              _fake_response("voice", spans))
+    _call(ctx, "Synthesize and measure the VO.", stub=spans, fallback_cost=0.012)
     return {"audio": spans, "log": [f"voice: {spans['n_spans']} spans measured"]}
 
 
 def envelope(state: Production, ctx: Ctx) -> dict:
-    env = {"duck_db": -9.0, "full_at_drop": True}
-    ctx.spend(0.002, {"stage": "envelope"}, _fake_response("envelope", env))
+    env = _call(ctx, "Fit a ducking envelope to the measured VO spans.",
+                stub={"duck_db": -9.0, "full_at_drop": True}, fallback_cost=0.002)
     return {"envelope": env, "log": ["envelope: -9dB under speech, full across the drop"]}
 
 
@@ -225,8 +278,8 @@ def repair(state: Production, ctx: Ctx) -> dict:
         shot["in_s"] = snapped
         fixed.append(shot_id)
 
-    ctx.spend(0.004, {"stage": "repair", "fixed": fixed},
-              _fake_response("repair", {"shots": fixed}))
+    _call(ctx, f"Retime shots {fixed} onto the nearest beat. Change nothing else.",
+          stub={"shots": fixed}, fallback_cost=0.004)
 
     return {"edl": edl, "repair_round": state["repair_round"] + 1,
             "log": [f"repair round {state['repair_round'] + 1}: retimed {fixed or 'nothing'}"]}

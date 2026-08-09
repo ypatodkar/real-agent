@@ -1,0 +1,165 @@
+"""The model client — one interface, three backends.
+
+Gemini text, Imagen and TTS all go through `google-genai`. LangGraph orchestrates;
+it never touches a model. That split matters for one specific reason:
+
+    the recorder needs the provider payload VERBATIM, including
+    groundingMetadata, or replay stops being free.
+
+Chat abstractions normalise responses into a common message shape, and
+provider-specific metadata is exactly what gets flattened out in that
+translation. Calling the SDK directly means there is nothing in the path that
+could drop it.
+
+Backend selection, in order:
+
+    SECOND_UNIT_BACKEND=vertex   + GOOGLE_CLOUD_PROJECT   -> Vertex AI  (GCP credits)
+    SECOND_UNIT_BACKEND=aistudio + GOOGLE_API_KEY         -> Gemini Developer API
+    neither                                               -> stub, no network
+
+Which one your $100 actually covers is a billing question, not a code question.
+Credits are usually attached to a GCP billing account, which means Vertex.
+Confirm before the sweep, not after.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+from dataclasses import dataclass, field
+from typing import Any
+
+DEFAULT_TEXT_MODEL = os.environ.get("SECOND_UNIT_TEXT_MODEL", "gemini-2.5-flash")
+
+# Placeholders, same status as the caps in ARCHITECTURE.md §9. Confirm against
+# current published rates before trusting any cost number this produces.
+RATES_PER_MTOK = {
+    "gemini-2.5-flash": {"in": 0.30, "out": 2.50},
+    "gemini-2.5-pro":   {"in": 1.25, "out": 10.00},
+}
+
+
+@dataclass
+class Response:
+    text: str
+    raw: dict[str, Any]                  # verbatim provider payload — for the recorder
+    usage: dict[str, int] = field(default_factory=dict)
+    cost: float = 0.0
+    grounding: list[dict] = field(default_factory=list)
+    stub: bool = False
+
+    def json(self) -> Any:
+        """Parse the text as JSON. Stages ask for structured output."""
+        return json.loads(self.text)
+
+
+def _price(model: str, usage: dict[str, int]) -> float:
+    rate = RATES_PER_MTOK.get(model)
+    if not rate:
+        return 0.0
+    return round(
+        usage.get("prompt_tokens", 0) / 1e6 * rate["in"]
+        + usage.get("output_tokens", 0) / 1e6 * rate["out"],
+        6,
+    )
+
+
+class StubClient:
+    """No network. Deterministic fixtures so the graph runs without credentials."""
+
+    backend = "stub"
+
+    def generate(self, prompt: str, *, stub: dict, model: str = DEFAULT_TEXT_MODEL,
+                 grounded: bool = False, **_) -> Response:
+        payload = json.dumps(stub)
+        return Response(
+            text=payload,
+            raw={"_stub": True, "model": model,
+                 "candidates": [{"content": {"parts": [{"text": payload}]}}],
+                 "usageMetadata": {"promptTokenCount": 0, "candidatesTokenCount": 0}},
+            usage={"prompt_tokens": 0, "output_tokens": 0},
+            cost=0.0,
+            stub=True,
+        )
+
+
+class GeminiClient:
+    """Real calls. Same class for Vertex and AI Studio — only the Client differs."""
+
+    def __init__(self, *, vertex: bool):
+        from google import genai
+
+        self.backend = "vertex" if vertex else "aistudio"
+        if vertex:
+            self._client = genai.Client(
+                vertexai=True,
+                project=os.environ["GOOGLE_CLOUD_PROJECT"],
+                location=os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1"),
+            )
+        else:
+            self._client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
+
+    def generate(self, prompt: str, *, model: str = DEFAULT_TEXT_MODEL,
+                 system: str | None = None, schema: Any = None,
+                 grounded: bool = False, temperature: float = 0.2,
+                 **_) -> Response:
+        from google.genai import types
+
+        cfg: dict[str, Any] = {"temperature": temperature}
+        if system:
+            cfg["system_instruction"] = system
+        if schema is not None:
+            cfg["response_mime_type"] = "application/json"
+            cfg["response_schema"] = schema
+        if grounded:
+            # Grounding and a response_schema are mutually exclusive on this API.
+            cfg.pop("response_schema", None)
+            cfg.pop("response_mime_type", None)
+            cfg["tools"] = [types.Tool(google_search=types.GoogleSearch())]
+
+        result = self._client.models.generate_content(
+            model=model, contents=prompt,
+            config=types.GenerateContentConfig(**cfg),
+        )
+
+        raw = result.model_dump(mode="json", exclude_none=True)
+
+        um = raw.get("usage_metadata") or {}
+        usage = {
+            "prompt_tokens": um.get("prompt_token_count", 0),
+            "output_tokens": um.get("candidates_token_count", 0),
+        }
+
+        grounding = [
+            c["grounding_metadata"]
+            for c in raw.get("candidates", [])
+            if c.get("grounding_metadata")
+        ]
+
+        return Response(
+            text=result.text or "",
+            raw=raw,                       # verbatim — this is what replay reads
+            usage=usage,
+            cost=_price(model, usage),
+            grounding=grounding,
+        )
+
+
+def get_client(verbose: bool = True):
+    backend = os.environ.get("SECOND_UNIT_BACKEND", "").lower()
+
+    if backend == "vertex" and os.environ.get("GOOGLE_CLOUD_PROJECT"):
+        return GeminiClient(vertex=True)
+    if backend == "aistudio" and os.environ.get("GOOGLE_API_KEY"):
+        return GeminiClient(vertex=False)
+
+    # infer, so a key alone is enough to go live
+    if os.environ.get("GOOGLE_CLOUD_PROJECT"):
+        return GeminiClient(vertex=True)
+    if os.environ.get("GOOGLE_API_KEY"):
+        return GeminiClient(vertex=False)
+
+    if verbose:
+        print("  [model] no credentials — using stubs. Set GOOGLE_CLOUD_PROJECT "
+              "(Vertex) or GOOGLE_API_KEY (AI Studio) to go live.")
+    return StubClient()
