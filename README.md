@@ -109,7 +109,7 @@ Pass rate is tracked per format. The expectation is that it falls as cast size r
 | Observability | Grafana Cloud, via the Grafana MCP server at runtime |
 | Rendering | ffmpeg — deterministic, no model in the loop |
 
-Built for [Agentic Cinema](https://agentic-cinema.devpost.com/), Grafana track. The hackathon restricts the stack to Google AI services, so there are no other model providers or agent frameworks in this repo by design.
+Built for [Agentic Cinema](https://agentic-cinema.devpost.com/), Grafana track. Every model call goes to Google — Gemini for planning and grading, Imagen for images, Gemini TTS for speech. Orchestration is [LangGraph](https://langchain-ai.github.io/langgraph/), which generates nothing and simply decides what runs when, the same way ffmpeg composites and librosa measures.
 
 **Three choices do most of the work on cost and trustworthiness.**
 

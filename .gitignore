@@ -7,3 +7,4 @@ __pycache__/
 # Generated, and reproducible from tools/ — regenerate rather than clone.
 assets/fixtures/
 out/
+runs/
