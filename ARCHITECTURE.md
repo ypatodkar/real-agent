@@ -10,11 +10,23 @@
 | **Partner track** | Grafana Cloud, via MCP |
 | **Budget** | $100 total credit · `$0.110` per run |
 | **Deadline** | September 7, 2026 · submitting Sep 5 |
-| **Status** | Design complete. Implementation begins Aug 7. |
+| **Status** | **Aug 8.** Design complete. No code written. One prerequisite missing. |
 
 **This is the single authoritative document.** It absorbed and replaced `AGENTS.md` and `architecture.html`, which were removed on Aug 8 — both remain in git history if anything needs recovering. `README.md` is the short public pitch and is not a design document.
 
 **Status key:** ⬜ open · 🟡 in design · ✅ locked · 🔒 immutable by constraint
+
+### Where this actually stands
+
+| | |
+|---|---|
+| ✅ | Design locked across all seven agents, with 65 dated decisions in [Appendix A](#appendix-a--decision-log) |
+| ✅ | Grafana MCP reachable from Gemini; Imagen and TTS quota confirmed |
+| ❌ | **The pre-scored music library does not exist.** It was scheduled for Aug 4–6 and was not built. Every planning stage downstream depends on it. |
+| ❌ | No source code. Not one line. Day 2 of the week allotted to the harness. |
+| ⬜ | Three blockers still unanswered, all flagged ▲ in [Appendix B](#appendix-b--open-questions) |
+
+**The honest read:** the design has been revised faster than it has been implemented, and thinking has stayed cheaper than building for four days running. Every remaining decision in this document is now downstream of getting something to render.
 
 ---
 
@@ -40,9 +52,9 @@
 
 ### The goal
 
-Give the system a topic. It decides the format, researches the subject, writes a multi-character script, casts and voices the speakers, scores it, cuts it to the beat — then runs eleven automated quality checks and repairs its own mistakes until the result passes.
+Give the system a topic. It proposes what kind of video that should be — intent, format, tone, duration — and you accept or change it. Then it researches the subject, writes the script, voices the speakers against a real beat grid, generates the backgrounds, cuts to the music, and runs eleven automated quality checks, repairing its own mistakes until the result passes.
 
-The interesting output is not the video. It is the **pass rate**: the percentage of runs that clear all eleven checks, tracked per format, over time, as the system is tuned.
+The interesting output is not the video. It is the **pass rate**: the share of runs clearing every check that applies to them, tracked per intent and format, over time, as the system is tuned.
 
 ### The problem, at two altitudes
 
@@ -59,7 +71,8 @@ The interesting output is not the video. It is the **pass rate**: the percentage
 | Output | An `.mp4` | An **edit decision list**, rendered deterministically |
 | Quality | Whatever came out | Eleven checks, nine of them free arithmetic |
 | On failure | Ship it anyway | Route the violation to the agent that caused it, repair, re-check |
-| Characters | Regenerated per shot, drift visible | Generated once, cached, animated — drift impossible by construction |
+| Characters | Regenerated per shot, drift visible | **A fixed roster, drawn once and reviewed** — drift impossible by construction |
+| Planning | One prompt, one guess | A proposed plan you can edit before anything is spent |
 | Evidence it works | A good-looking demo | Pass rate across a scenario bank, tracked over time |
 
 The consequence is that the system can answer a question most agent demos can't: **is it actually improving, and by how much?**
@@ -202,11 +215,26 @@ Even at 10, unasked fields still appear as chips. The dial controls what gets as
 
 ## 3 · The pipeline
 
+### Two prerequisites, established before any run
+
+Neither is a pipeline stage. Both are fixtures a run *reads*, and a run cannot start without them.
+
+| Fixture | Built | Contains | State |
+|---|---|---|---|
+| **Cast roster** | Once, at setup, with the user in the loop | 1–3 characters × 9 sprites | ⬜ Not built |
+| **Music library** | Once, offline | Tracks with verified beat grids and drop positions | ❌ **Missing** — see [§11](#11--build-order) |
+
+> **The music library is the live blocker.** Scoring 6a is the first stage of every run and it is a lookup into this library; the Showrunner then cuts against the grid it returns. Without it there is no grid, so there is no `beat_alignment`, so the headline metric has nothing to measure. **The compositor spike does not need real music** — synthetic audio at a known BPM gives an exact grid by construction — but nothing past the spike works until the library exists.
+
+### The run
+
 One request, end to end. Solid edges are the forward path; dashed edges are feedback. The only cycle in the system is the QC repair loop — everything else is a straight line, which is what keeps it debuggable.
 
 ```mermaid
 flowchart TD
-    U["Topic — free text<br/>+ involvement 0–10"] --> A1["1 · Brief Agent"]
+    FX[("Fixtures — read, never written<br/>cast roster · music library")] -.-> A6A
+    FX -.-> A4
+    U["Topic — free text<br/>+ involvement 0–10"] --> A1["1 · Brief Agent<br/>intent · format · tone"]
     A1 --> G1{{"GATE 1 — confirm brief"}}
     G1 --> A6A["6a · Scoring — select<br/>track · exact grid · drop"]
     A6A --> A3A["3a · Showrunner — outline<br/>beats · arc · turn on the drop"]
@@ -233,7 +261,9 @@ flowchart TD
 
 **Three orderings are load-bearing, and each was chosen against an obvious-looking alternative.**
 
-> **Scoring runs first, before anything is planned.** The Showrunner cuts to a beat grid, and that grid has to be real. Because tracks come from a pre-scored library, their grids and drop positions are measured exactly, offline — so beat alignment is checked against ground truth. Every `beat_alignment` failure is then a genuine planning failure, never beat-detection error. Scoring also *proposes* the drop from the track's own structure, and the outline places its emotional turn there: the story lands on a real musical event instead of an arbitrary timestamp.
+> **Scoring runs first, before anything is planned.** The Showrunner cuts to a beat grid, and that grid has to be real. Because tracks come from a pre-scored library, their grids and drop positions are fixed and verified before any run touches them — so beat alignment is checked against ground truth. Every `beat_alignment` failure is then a genuine planning failure, never beat-detection error. Scoring also *proposes* the drop from the track's own structure, and the outline places its emotional turn there: the story lands on a real musical event instead of an arbitrary timestamp.
+>
+> **To be clear about what "pre-scored" forbids:** it rules out detecting beats at *runtime*, on audio the system just generated. Detection **offline, once, then verified by ear and corrected** is exactly how the library gets built — the grid is ground truth because it has been checked, not because a detector never touched it. `librosa.beat.beat_track()` plus a listening pass is the intended workflow.
 
 > **Research sits between the Showrunner's two passes.** You cannot know which facts you need until you know what the script is about. The outline flags beats as `needs_fact`; Research sources exactly those. Researching the topic broadly first spends money on claims the script never uses, and quietly lets whatever the search surfaced dictate the story.
 
@@ -546,7 +576,11 @@ SHOWRUNNER: rewrite line 4 only, target ≤ 3.5s spoken
 
 **✅ Pre-scored library, not generated music**
 
-A generated track needs beat detection, and detection error produces alignment failures that have nothing to do with planning quality — which makes the headline metric untrustworthy. With a pre-scored library the grid is ground truth, so **every beat-alignment failure is a real planning failure.** Generation can be swapped back in later; the interface downstream is `{track, grid, drop_s}` either way.
+A generated track needs beat detection *at runtime*, and detection error produces alignment failures that have nothing to do with planning quality — which makes the headline metric untrustworthy. With a pre-scored library the grid is ground truth, so **every beat-alignment failure is a real planning failure.** Generation can be swapped back in later; the interface downstream is `{track, grid, drop_s}` either way.
+
+**Building the library.** ❌ Not yet done — this is the outstanding prerequisite from Aug 4–6. Per track: CC-licensed and **steady-tempo** (detectors are reliable on a constant grid and poor on rubato), `librosa.beat.beat_track()` for tempo and beat frames, an RMS or spectral-flux novelty peak for the drop candidate, then **listen and correct**. Store `{track, bpm, grid[], drop_s, license, attribution}`. The listening pass is what converts a detection into ground truth.
+
+Target ~6 tracks for the eval sweep, 12–15 for the product. ⬜ **Assign tracks randomly across sweep runs, never one per grid cell** — with six tracks and six cells, a one-to-one pairing makes a bad track indistinguishable from a bad configuration and confounds the entire grid.
 
 **✅ Scoring proposes the drop, the outline confirms**
 
@@ -911,8 +945,8 @@ Vertical slice first. The single riskiest path — a Gemini call reaching Grafan
 
 | Dates | Milestone |
 |---|---|
-| **Aug 4–6** | ✅ **Spike, then commit.** Gemini calls the Grafana Cloud MCP server and reads one metric. Confirm Imagen and TTS quota and price one render. Assemble the pre-scored music library and measure its beat grids offline — that artifact is a prerequisite for every planning stage downstream. |
-| **Aug 7–13** | **Harness core plus a one-shot spine.** Tool registry, trajectory recorder, budget enforcer. Brief → Showrunner → Compositor with a single narrator and no research. It will look bad. It runs end to end. |
+| **Aug 4–6** | 🟡 **Spike — partially done.** ✅ Gemini reaches the Grafana Cloud MCP server and reads a metric. ✅ Imagen and TTS quota confirmed. ❌ **The music library was not assembled**, and it is the prerequisite every planning stage depends on. This slipped into week two. |
+| **Aug 7–13** | 🟡 **Harness core plus a one-shot spine.** *Day 2 of 7, no code yet.* Compositor spike, music library, tool registry, trajectory recorder, budget enforcer. Brief → Showrunner → Compositor with a single narrator and no research. It will look bad. It runs end to end. |
 | **Aug 14–20** | **QC gate and the repair loop.** All nine free rules, the violation schema, the router. This is the week the project becomes what it is. Add Research and Casting once repair closes. |
 | **Aug 21–27** | **Second speaker and the eval harness.** Cast of two, attribution and identity rules live. Scenario bank, headless runner, first real pass-rate number on a Grafana panel. |
 | **Aug 28–Sep 3** | **Improvement loop and hosting.** One measured improvement, start to finish, with a before-and-after curve. Deploy. Freeze features on Sep 3 regardless of what is unfinished. |
@@ -920,13 +954,22 @@ Vertical slice first. The single riskiest path — a Gemini call reaching Grafan
 
 ### Order of work inside week one
 
-1. **Resolve the state-object question** ([Appendix B](#appendix-b--open-questions)) — it decides every function signature in the harness.
-2. **Trajectory recorder.** Model call in, tool result out, both verbatim, append-only, one file per run.
-3. **Budget check, pre-execution.** A map of stage → (cap, breach behaviour) and a guard that runs before the call.
-4. **Tool registry** as a closed dict.
-5. **The ugly spine.** Brief → Showrunner → Compositor, one narrator, no research, no gates.
+**Revised Aug 8.** The compositor moves to the front. It is the only piece with no dependency on any open question, it needs no model and no API key, and **nothing in the project has verified it** — yet every one of the eleven rules reads either the EDL or rendered output. If 30fps sprite compositing, the amplitude-gated mouth cycle, or beat-accurate cutting behave differently than this document assumes, everything above them is moot.
 
-The involvement dial is deliberately absent from that list. At `involvement: 0` the gate is `pass`, which is exactly the version the spine needs.
+| # | Task | Depends on |
+|---|---|---|
+| 0 | **Click-track fixture.** Synthesize audio at a known BPM — the grid is then exact by construction, with no detection and no licensing. | nothing |
+| 1 | **Compositor spike.** Hand-written EDL, two stub sprites, ten seconds out of ffmpeg. No models, no harness. | 0 |
+| 2 | **Music library.** ~6 CC-licensed steady-tempo tracks, `librosa` beat track, verify each grid and drop by ear, store as JSON. | nothing |
+| 3 | **Answer the three ▲ blockers** — state object, raw-vs-ADK, `beat_alignment` owner. Decisions, not code; roughly an hour. | nothing |
+| 4 | **Trajectory recorder.** Model call in, tool result out, both verbatim, append-only, one file per run. | 3 |
+| 5 | **Budget check, pre-execution.** A map of stage → (cap, breach behaviour), guarding every call. | 3 |
+| 6 | **Tool registry** as a closed dict. | 3 |
+| 7 | **The ugly spine.** Brief → Showrunner → Compositor, one narrator, no research, no gates. | 1–6 |
+
+Items 0–2 are unblocked right now and need no decisions. Item 3 gates everything after it.
+
+**Two things are deliberately absent.** The involvement dial — at `involvement: 0` the gate is `pass`, which is all the spine needs. And the cast roster — the spike uses stub sprites, and the real setup flow can wait until there is something to put characters into.
 
 ---
 
@@ -991,6 +1034,10 @@ The involvement dial is deliberately absent from that list. At `involvement: 0` 
 | Aug 8 | 🔒 **Eval** | **Pass rate is reported per intent and never pooled** | Intents carry different thresholds and Brief picks the intent — a pooled number hands Brief a lever on its own grade. Same class of failure as a mutable grader. |
 | Aug 8 | Eval | Sweep grid is **6 cells × 20 runs ≈ $13**; interactions out of scope | The full Intent × Format × Tone cross-product is 150 cells ≈ $330 against $100 of credit. |
 | Aug 8 | System | **No stage is skipped by configuration — only emptied** | A Comedy reel flags no `needs_fact` beats, so Research runs and sources nothing. One code path, one trajectory shape, comparable telemetry. |
+| Aug 8 | Docs | `AGENTS.md` and `architecture.html` **deleted**; this document is sole authority | Both described library backgrounds, per-run characters, 5 poses and 5 formats. Stale docs are how a design silently forks. |
+| Aug 8 | Scoring | Offline detect-then-verify **is** how the library gets built; only *runtime* detection is forbidden | Removes a misreading that implied hand-tapping every track. |
+| Aug 8 | Build | **Compositor spike moves to the front of week one**, ahead of the harness | Only piece with no dependency on an open question, needs no model, and nothing has verified it — yet all eleven rules read the EDL or the render. |
+| Aug 8 | Build | Spike uses a **synthetic click track** at known BPM, not real music | Grid is exact by construction. Unblocks rendering today without waiting on the library or on licensing. |
 | Aug 7 | **System** | **Hard per-stage dollar caps, checked before execution; no phase pools** | Guards against one runaway trajectory at 3am. Run total `$0.110`. |
 | Aug 7 | System | Breach behaviour differs by stage: cheap-and-early **abort**, expensive-and-late **degrade** | Aborting a $0.005 Brief is free; aborting a $0.025 script pass discards everything spent. |
 | Aug 7 | System | **QC graders never degrade** — out of budget voids the run | The pass rate is the product. A partial judge is worse than no judge. |
