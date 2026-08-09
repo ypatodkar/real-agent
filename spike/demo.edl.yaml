@@ -1,0 +1,90 @@
+# Hand-written EDL — the artifact the Showrunner would emit.
+# Written by hand so the compositor can be proven with no model in the loop.
+#
+# Beat grid: 96 BPM, 0.625 s/beat, drop at 5.000s (beat 8).
+# Shot boundaries sit on beats, EXCEPT sh_04, which is deliberately 80ms late
+# so beat_alignment has a real violation to catch.
+
+meta:
+  intent: commentary
+  format: debate
+  tone: wry
+  fps: 30
+  duration_s: 15.0
+  track: fixtures/music.wav
+  grid: fixtures/grid.json
+
+params:
+  beat_tolerance_ms: 60
+  max_hold_s: 2.0
+  bg_budget: 2
+
+cast:
+  - role: skeptic
+    character_id: ch_01
+    x: 0.28
+  - role: enthusiast
+    character_id: ch_02
+    x: 0.72
+
+shots:
+  - id: sh_01
+    in_s: 0.000
+    out_s: 2.500
+    speaker: ch_01
+    layers:
+      - { type: bg, scene_id: sc_studio }
+      - { type: character, id: ch_01, pose: talking }
+      - { type: character, id: ch_02, pose: listening }
+      - { type: caption, text: "Everyone says agents are the future." }
+
+  - id: sh_02
+    in_s: 2.500
+    out_s: 5.000
+    speaker: ch_02
+    layers:
+      - { type: bg, scene_id: sc_studio }
+      - { type: character, id: ch_01, pose: skeptical }
+      - { type: character, id: ch_02, pose: talking }
+      - { type: caption, text: "They are. You just haven't seen a good one." }
+
+  # the drop lands at 5.000s — the turn goes here
+  - id: sh_03
+    in_s: 5.000
+    out_s: 7.500
+    speaker: ch_01
+    layers:
+      - { type: bg, scene_id: sc_data }
+      - { type: character, id: ch_01, pose: talking }
+      - { type: character, id: ch_02, pose: nodding }
+      - { type: caption, text: "Name one that ships without a human fixing it." }
+
+  - id: sh_04
+    in_s: 7.580          # 80ms late — beat is at 7.500. Should FAIL at 60ms.
+    out_s: 10.000
+    speaker: ch_02
+    layers:
+      - { type: bg, scene_id: sc_data }
+      - { type: character, id: ch_01, pose: listening }
+      - { type: character, id: ch_02, pose: gesturing }
+      - { type: caption, text: "That's the whole point of checking the output." }
+
+  - id: sh_05
+    in_s: 10.000
+    out_s: 12.500
+    speaker: ch_01
+    layers:
+      - { type: bg, scene_id: sc_data }
+      - { type: character, id: ch_01, pose: talking }
+      - { type: character, id: ch_02, pose: skeptical }
+      - { type: caption, text: "So the checker is the product, not the video." }
+
+  - id: sh_06
+    in_s: 12.500
+    out_s: 15.000
+    speaker: null
+    layers:
+      - { type: bg, scene_id: sc_studio }
+      - { type: character, id: ch_01, pose: idle }
+      - { type: character, id: ch_02, pose: laughing }
+      - { type: caption, text: "…that's what I just said." }
