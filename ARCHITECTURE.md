@@ -21,7 +21,7 @@
 | ✅ | Grafana MCP reachable from Gemini; Imagen and TTS quota confirmed |
 | ✅ | **Compositor proven** — 30fps sprite compositing, the 5Hz mouth cycle, beat-accurate cuts, determinism |
 | ✅ | **Harness core** — budget enforcer, trajectory recorder, closed tool registry, scope guard |
-| ✅ | **Graph runs end to end** on LangGraph: gates as interrupts, repair loop closing, `beat_alignment` and `duration_adherence` live |
+| ✅ | **Pipeline runs end to end** — declared topology, gates suspending on a generator, repair loop closing, `beat_alignment` and `duration_adherence` live |
 | ✅ | Model client behind one interface; Vertex and AI Studio are one env var apart |
 | ⬜ | Credentials, then the grounding probe — replay depends on citation metadata surviving |
 | ❌ | **The pre-scored music library does not exist.** Synthetic fixtures stand in. Every planning stage depends on the real thing. |
@@ -833,11 +833,11 @@ Two details worth building properly.
 
 ### Implementation stance
 
-**Write the harness directly against the `google-genai` SDK rather than adopting an agent framework.** Frameworks earn their keep when control flow is emergent; this pipeline is a fixed ten-stage DAG with one bounded cycle, and only two stages (Research, Showrunner-script) actually iterate. The two genuinely novel pieces — three-way breach behaviour and verbatim-grounding replay — have no framework equivalent and would be built anyway.
+**No orchestration framework.** ✅ `harness/runner.py` walks a topology declared as a lookup table in `pipeline/graph.py`. Frameworks earn their keep when control flow is emergent; this pipeline is a fixed ten-stage sequence with one branch and one back edge, and only two stages (Research, Showrunner-script) iterate at all.
 
-If the track mandates ADK, wrap rather than restructure: make each stage a `BaseAgent`, let ADK sequence and emit spans, and keep budget enforcement, the recorder, the registry and the dial as harness code called from inside.
+Model calls go straight to `google-genai`. The two genuinely load-bearing pieces — three-way breach behaviour and verbatim-grounding replay — have no framework equivalent and were always going to be hand-written.
 
-⬜ **This decision is not yet ratified in the log.**
+> **This was briefly LangGraph.** Swapping it out touched two files, because budget, recorder, registry, scope guard and every stage take a state dict and return a partial update — a shape no framework owns. If ADK is ever mandated, the same property holds in reverse: make each stage a `BaseAgent` and let it sequence them, with the harness called from inside.
 
 ---
 
@@ -1038,14 +1038,17 @@ The **involvement dial's question budget** — at `involvement: 0` the gate is a
 | Aug 8 | Scoring | Offline detect-then-verify **is** how the library gets built; only *runtime* detection is forbidden | Removes a misreading that implied hand-tapping every track. |
 | Aug 8 | Build | **Compositor spike moves to the front of week one**, ahead of the harness | Only piece with no dependency on an open question, needs no model, and nothing has verified it — yet all eleven rules read the EDL or the render. |
 | Aug 8 | Build | Spike uses a **synthetic click track** at known BPM, not real music | Grid is exact by construction. Unblocks rendering today without waiting on the library or on licensing. |
-| Aug 9 | **System** | **State is one `Production` object passed to every node** | Owner's call, against the declared-inputs alternative. It is the idiomatic LangGraph shape, so state and framework are one decision rather than two. |
+| Aug 9 | **System** | **State is one `Production` object passed to every node** | Owner's call, against the declared-inputs alternative. `assert_scope` compensates at runtime for the guarantee this gives up. |
 | Aug 9 | System | `assert_scope` guards repair scoping at **runtime** instead of structurally | The cost of a shared state object: "frozen" becomes a convention. A key-level diff after each repair node fails loudly the first time round 2 undoes round 1. |
-| Aug 9 | **System** | **LangGraph for orchestration**, `langchain-google-*` for Gemini text | It contains no model and generates nothing — same category as ffmpeg or librosa. The Google-AI-services constraint governs *services*, not libraries. |
-| Aug 9 | System | Gates are LangGraph `interrupt()`; resume contract is `{"edits": {...}}` | A bare `{}` is falsy, which LangGraph reads as "no value supplied" — the gate re-interrupts and the run stalls. The envelope is load-bearing. |
+| Aug 9 | System | ~~LangGraph for orchestration~~ | **Reversed Aug 10** — unavailable. |
+| Aug 9 | System | ~~Gates are LangGraph `interrupt()`~~ | **Reversed Aug 10** — replaced by a generator `Pause`. |
 | Aug 9 | **Scoring** | 🔒 **`beat_alignment` routes to the Showrunner, always** — `beat_offset → reselect` deleted from Scoring's inbox | Reselecting the track invalidates every cut, forcing a full 3a+3b replan at `$0.035` against a `$0.015` repair pool. It could never execute. |
 | Aug 9 | Scoring | Tempo suitability becomes a **filter in `track_select`**, not a repair | A track too coarse to place the planned cuts is a bad selection, fixed upstream at $0, not a repair round. |
 | Aug 9 | Budget | Pre-execution check reserves a per-stage **`est`**, not the full cap | Reserving the cap made any twice-run stage look exhausted on its second call — which broke the repair pool, sized for three cheap rounds. |
-| Aug 9 | Graph | Asset stages are **chained, not fanned out** | Unequal branch lengths (casting is one hop, voice→envelope is two) fired the join node once per branch and composited twice. Serialising costs wall-clock nobody is measuring. |
+| Aug 9 | Graph | Asset stages are **chained, not fanned out** | One ordered path means one composite per round. Wall-clock is not a metric here. |
+| Aug 10 | **System** | **No orchestration framework.** `harness/runner.py` walks a declared topology | LangGraph is unavailable. The pipeline is a fixed sequence with one branch and one back edge — a `while` loop over a lookup table, ~60 lines, and every frame in a stack trace is ours. |
+| Aug 10 | System | Gates suspend via a **generator `Pause`**, resumed with `send(edits)` | The generator *is* the suspended state, so no checkpointer is needed. Also removes the falsy-empty-dict trap the framework had. |
+| Aug 10 | System | State reducers are read from `Production`'s `Annotated` metadata | Keeps `state.py` the single definition of which fields accumulate, independent of what walks the graph. |
 | Aug 7 | **System** | **Hard per-stage dollar caps, checked before execution; no phase pools** | Guards against one runaway trajectory at 3am. Run total `$0.110`. |
 | Aug 7 | System | Breach behaviour differs by stage: cheap-and-early **abort**, expensive-and-late **degrade** | Aborting a $0.005 Brief is free; aborting a $0.025 script pass discards everything spent. |
 | Aug 7 | System | **QC graders never degrade** — out of budget voids the run | The pass rate is the product. A partial judge is worse than no judge. |

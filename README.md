@@ -107,11 +107,11 @@ Pass rate is tracked per intent and format, and never pooled across intents: the
 |---|---|
 | Models | Gemini (planning, grading, grounded search), Imagen (characters, backgrounds), Gemini TTS |
 | Music | Pre-scored library — beat grids and drop positions verified once, offline |
-| Orchestration | LangGraph — no model in it; it decides what runs when |
+| Orchestration | None — a declared topology walked by ~60 lines of harness |
 | Observability | Grafana Cloud, via the Grafana MCP server at runtime |
 | Rendering | ffmpeg — deterministic, no model in the loop |
 
-Built for [Agentic Cinema](https://agentic-cinema.devpost.com/), Grafana track. Every model call goes to Google — Gemini for planning and grading, Imagen for images, Gemini TTS for speech. Orchestration is [LangGraph](https://langchain-ai.github.io/langgraph/), which generates nothing and simply decides what runs when, the same way ffmpeg composites and librosa measures.
+Built for [Agentic Cinema](https://agentic-cinema.devpost.com/), Grafana track. Every model call goes to Google — Gemini for planning and grading, Imagen for images, Gemini TTS for speech. There is no agent framework: the pipeline is a fixed sequence with one branch and one back edge, so it is declared as a table and walked by a loop.
 
 **Three choices do most of the work on cost and trustworthiness.**
 

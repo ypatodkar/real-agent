@@ -13,13 +13,12 @@ from __future__ import annotations
 import argparse
 import json
 
-from langgraph.types import Command
-
 from harness.budget import Ledger
 from harness.node import Aborted
 from harness.recorder import Recorder, new_run_id
+from harness.runner import Pause
 from harness.state import new_production, total_spend
-from pipeline.graph import build
+from pipeline.graph import build, describe
 
 
 def main() -> int:
@@ -35,26 +34,23 @@ def main() -> int:
     app = build(run_id, ledger, recorder)
 
     if args.graph:
-        print(app.get_graph().draw_ascii())
+        print(describe())
         return 0
 
     state = new_production(args.topic, args.involvement, run_id)
-    config = {"configurable": {"thread_id": run_id}}
 
     print(f"run          {run_id}")
     print(f"topic        {args.topic!r}")
     print(f"involvement  {args.involvement}"
           f"{'  (eval path — no interruptions)' if args.involvement == 0 else ''}\n")
 
+    def on_pause(pause: Pause) -> dict:
+        """A real UI collects edits here. This accepts the proposal unchanged."""
+        print(f"  [gate] {pause.gate} proposes {pause.editable} — accepting unchanged")
+        return {}
+
     try:
-        final = app.invoke(state, config)
-        # Gates interrupt when involvement > 0. Drive them to completion,
-        # accepting each proposal unchanged — a real UI would collect edits here.
-        while final.get("__interrupt__"):
-            gate = final["__interrupt__"][0].value
-            print(f"  [gate] {gate['gate']} proposes {gate['editable']} "
-                  f"— accepting unchanged")
-            final = app.invoke(Command(resume={"edits": {}}), config)
+        final = app.drive(state, on_pause)
     except Aborted as exc:
         recorder.finish("aborted", total_spend(state), {"reason": str(exc)})
         print(f"ABORTED  {exc}")
