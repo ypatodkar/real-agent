@@ -9,24 +9,23 @@
 | **Stack** | Gemini · Imagen · Gemini TTS · ffmpeg |
 | **Partner track** | Grafana Cloud, via MCP |
 | **Budget** | $100 total credit · `$0.110` per run |
-| **Deadline** | September 7, 2026 · submitting Sep 5 |
-| **Status** | **Aug 8.** Design complete. No code written. One prerequisite missing. |
-
-**This is the single authoritative document.** It absorbed and replaced `AGENTS.md` and `architecture.html`, which were removed on Aug 8 — both remain in git history if anything needs recovering. `README.md` is the short public pitch and is not a design document.
+**This is the single authoritative document.** It absorbed and replaced `AGENTS.md` and `architecture.html`, both of which were removed — they remain in git history if anything needs recovering. `README.md` is the short public pitch and is not a design document.
 
 **Status key:** ⬜ open · 🟡 in design · ✅ locked · 🔒 immutable by constraint
 
-### Where this actually stands
+### Where this stands
 
 | | |
 |---|---|
-| ✅ | Design locked across all seven agents, with 65 dated decisions in [Appendix A](#appendix-a--decision-log) |
+| ✅ | Design locked across all seven agents, with the full decision log in [Appendix A](#appendix-a--decision-log) |
 | ✅ | Grafana MCP reachable from Gemini; Imagen and TTS quota confirmed |
-| ❌ | **The pre-scored music library does not exist.** It was scheduled for Aug 4–6 and was not built. Every planning stage downstream depends on it. |
-| ❌ | No source code. Not one line. Day 2 of the week allotted to the harness. |
-| ⬜ | Three blockers still unanswered, all flagged ▲ in [Appendix B](#appendix-b--open-questions) |
-
-**The honest read:** the design has been revised faster than it has been implemented, and thinking has stayed cheaper than building for four days running. Every remaining decision in this document is now downstream of getting something to render.
+| ✅ | **Compositor proven** — 30fps sprite compositing, the 5Hz mouth cycle, beat-accurate cuts, determinism |
+| ✅ | **Harness core** — budget enforcer, trajectory recorder, closed tool registry, scope guard |
+| ✅ | **Graph runs end to end** on LangGraph: gates as interrupts, repair loop closing, `beat_alignment` and `duration_adherence` live |
+| ✅ | Model client behind one interface; Vertex and AI Studio are one env var apart |
+| ⬜ | Credentials, then the grounding probe — replay depends on citation metadata surviving |
+| ❌ | **The pre-scored music library does not exist.** Synthetic fixtures stand in. Every planning stage depends on the real thing. |
+| ⬜ | Nine of eleven QC rules unimplemented |
 
 ---
 
@@ -42,7 +41,7 @@
 8. [The harness](#8--the-harness)
 9. [Cost model](#9--cost-model)
 10. [Evaluation and self-improvement](#10--evaluation-and-self-improvement)
-11. [Build order](#11--build-order)
+11. [Order of work](#11--order-of-work)
 · [Appendix A — Decision log](#appendix-a--decision-log)
 · [Appendix B — Open questions](#appendix-b--open-questions)
 
@@ -578,7 +577,7 @@ SHOWRUNNER: rewrite line 4 only, target ≤ 3.5s spoken
 
 A generated track needs beat detection *at runtime*, and detection error produces alignment failures that have nothing to do with planning quality — which makes the headline metric untrustworthy. With a pre-scored library the grid is ground truth, so **every beat-alignment failure is a real planning failure.** Generation can be swapped back in later; the interface downstream is `{track, grid, drop_s}` either way.
 
-**Building the library.** ❌ Not yet done — this is the outstanding prerequisite from Aug 4–6. Per track: CC-licensed and **steady-tempo** (detectors are reliable on a constant grid and poor on rubato), `librosa.beat.beat_track()` for tempo and beat frames, an RMS or spectral-flux novelty peak for the drop candidate, then **listen and correct**. Store `{track, bpm, grid[], drop_s, license, attribution}`. The listening pass is what converts a detection into ground truth.
+**Building the library.** ❌ Not yet done — the one outstanding prerequisite. Per track: CC-licensed and **steady-tempo** (detectors are reliable on a constant grid and poor on rubato), `librosa.beat.beat_track()` for tempo and beat frames, an RMS or spectral-flux novelty peak for the drop candidate, then **listen and correct**. Store `{track, bpm, grid[], drop_s, license, attribution}`. The listening pass is what converts a detection into ground truth.
 
 Target ~6 tracks for the eval sweep, 12–15 for the product. ⬜ **Assign tracks randomly across sweep runs, never one per grid cell** — with six tracks and six cells, a one-to-one pairing makes a bad track indistinguishable from a bad configuration and confounds the entire grid.
 
@@ -757,7 +756,7 @@ Not every rule applies to every configuration. A monologue has one character, so
 | `identity_drift` | ⬜ under review — sprites are stored and never regenerated, so a character may no longer be able to drift |
 | everything else | always |
 
-**No stage is ever skipped, only emptied.** A Comedy reel does not bypass Research: the outline flags few or no beats `needs_fact`, Research runs, sources nothing, and costs ~$0. This keeps one code path, one trajectory shape, and comparable telemetry across every configuration — and it preserves the Aug 5 decision that Research is graded uniformly with no `if factual` branch anywhere.
+**No stage is ever skipped, only emptied.** A Comedy reel does not bypass Research: the outline flags few or no beats `needs_fact`, Research runs, sources nothing, and costs ~$0. This keeps one code path, one trajectory shape, and comparable telemetry across every configuration — and it preserves the decision that Research is graded uniformly with no `if factual` branch anywhere.
 
 **The two model-graded rules are pinned and never mutable.** 🔒 If the Improvement Agent can reach a grader, the cheapest way to raise the pass rate is to make the judge lenient.
 
@@ -894,7 +893,7 @@ No phase pools. Every stage has a ceiling, the harness checks it *before* spendi
 
 ### Replay is a budget instrument
 
-When only grading logic changes, recorded trajectories are re-scored **at zero cost**. Half the sweeps in the improvement loop never spend a cent. Build it properly in week one precisely because of the $100 ceiling — it is the difference between six sweeps and twenty.
+When only grading logic changes, recorded trajectories are re-scored **at zero cost**. Half the sweeps in the improvement loop never spend a cent. Build it properly and early, precisely because of the $100 ceiling — it is the difference between six sweeps and twenty.
 
 ---
 
@@ -939,37 +938,38 @@ A 120-run sweep costs roughly **$13** at the current cap, which buys enough swee
 
 ---
 
-## 11 · Build order
+## 11 · Order of work
 
-Vertical slice first. The single riskiest path — a Gemini call reaching Grafana through the MCP server — gets proven before any architecture is written, because everything on this page is moot if it fails.
+Ordered by dependency, not by date. Anything with nothing in its *Blocked by* column can start now.
 
-| Dates | Milestone |
+### Done
+
+| | Proves |
 |---|---|
-| **Aug 4–6** | 🟡 **Spike — partially done.** ✅ Gemini reaches the Grafana Cloud MCP server and reads a metric. ✅ Imagen and TTS quota confirmed. ❌ **The music library was not assembled**, and it is the prerequisite every planning stage depends on. This slipped into week two. |
-| **Aug 7–13** | 🟡 **Harness core plus a one-shot spine.** *Day 2 of 7, no code yet.* Compositor spike, music library, tool registry, trajectory recorder, budget enforcer. Brief → Showrunner → Compositor with a single narrator and no research. It will look bad. It runs end to end. |
-| **Aug 14–20** | **QC gate and the repair loop.** All nine free rules, the violation schema, the router. This is the week the project becomes what it is. Add Research and Casting once repair closes. |
-| **Aug 21–27** | **Second speaker and the eval harness.** Cast of two, attribution and identity rules live. Scenario bank, headless runner, first real pass-rate number on a Grafana panel. |
-| **Aug 28–Sep 3** | **Improvement loop and hosting.** One measured improvement, start to finish, with a before-and-after curve. Deploy. Freeze features on Sep 3 regardless of what is unfinished. |
-| **Sep 4–5** | **Video, README, writeup — submit.** Three formats on one topic, side by side. Lead the README with the eval curve, not the sample output. Submit Sep 5; the deadline is 2:00pm PDT Sep 7 and you do not want to meet it. |
+| **Click-track fixture** | A grid that is exact by construction — no detection, no licensing. Any alignment error is the compositor's. |
+| **Compositor** | 30fps sprite compositing, the amplitude-gated 5Hz mouth cycle, beat-accurate cuts, and determinism across a clean rebuild. |
+| **Harness core** | Budget enforced before execution with three breach behaviours; verbatim trajectory recording; a closed tool registry; runtime scope guard on repairs. |
+| **The graph** | Every stage wired, gates as interrupts governed by the dial, the repair loop closing on a real violation. `involvement: 0` and `5` produce identical outcomes and identical spend. |
+| **Model client** | One interface over Vertex, AI Studio and a stub. Switching backend is an env var. |
 
-### Order of work inside week one
+### Next
 
-**Revised Aug 8.** The compositor moves to the front. It is the only piece with no dependency on any open question, it needs no model and no API key, and **nothing in the project has verified it** — yet every one of the eleven rules reads either the EDL or rendered output. If 30fps sprite compositing, the amplitude-gated mouth cycle, or beat-accurate cutting behave differently than this document assumes, everything above them is moot.
+| Task | Blocked by |
+|---|---|
+| **Credentials, then the grounding probe** | The billing question — which product the credit covers. Run `tools/check_grounding.py` first; if citation metadata does not survive, replay is not free and that changes the sweep economics. |
+| **Music library** — ~6 CC-licensed steady-tempo tracks, verified by ear | nothing |
+| **The seven remaining QC rules** | nothing — they read the EDL, which exists |
+| **Real Showrunner** — the script stage still loads the hand-written EDL | credentials |
+| **Cast roster setup flow** — two-phase selection, stored | credentials |
+| **Scenario bank + headless sweep** | QC rules |
+| **Grafana panels** | a sweep to put on them |
+| **Improvement loop** | a baseline to improve against |
 
-| # | Task | Depends on |
-|---|---|---|
-| 0 | **Click-track fixture.** Synthesize audio at a known BPM — the grid is then exact by construction, with no detection and no licensing. | nothing |
-| 1 | **Compositor spike.** Hand-written EDL, two stub sprites, ten seconds out of ffmpeg. No models, no harness. | 0 |
-| 2 | **Music library.** ~6 CC-licensed steady-tempo tracks, `librosa` beat track, verify each grid and drop by ear, store as JSON. | nothing |
-| 3 | **Answer the three ▲ blockers** — state object, raw-vs-ADK, `beat_alignment` owner. Decisions, not code; roughly an hour. | nothing |
-| 4 | **Trajectory recorder.** Model call in, tool result out, both verbatim, append-only, one file per run. | 3 |
-| 5 | **Budget check, pre-execution.** A map of stage → (cap, breach behaviour), guarding every call. | 3 |
-| 6 | **Tool registry** as a closed dict. | 3 |
-| 7 | **The ugly spine.** Brief → Showrunner → Compositor, one narrator, no research, no gates. | 1–6 |
+### Deliberately deferred
 
-Items 0–2 are unblocked right now and need no decisions. Item 3 gates everything after it.
+The **involvement dial's question budget** — at `involvement: 0` the gate is a pass-through, which is all the eval path needs, and the propose-then-edit surface already gives you override telemetry without proactive questions.
 
-**Two things are deliberately absent.** The involvement dial — at `involvement: 0` the gate is `pass`, which is all the spine needs. And the cast roster — the spike uses stub sprites, and the real setup flow can wait until there is something to put characters into.
+**Per-shot background generation** (`--bespoke-bg`) — the default path has to be cheap before the expensive path is worth having.
 
 ---
 

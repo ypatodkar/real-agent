@@ -31,7 +31,7 @@ Most short-form video generators are a straight pipeline: topic in, video out, o
 | Output | An `.mp4` | An **edit decision list**, rendered deterministically |
 | Quality | Whatever came out | Eleven checks, nine of them free arithmetic |
 | On failure | Ship it anyway | Route the violation to the agent that caused it, repair, re-check |
-| Characters | Regenerated per shot, drift visible | Generated once, cached, animated — drift impossible by construction |
+| Characters | Regenerated per shot, drift visible | **A fixed roster, drawn once and reviewed** — drift impossible by construction |
 | Evidence it works | A good-looking demo | Pass rate across a scenario bank, tracked over time |
 
 The consequence is that the system can answer a question most agent demos can't: **is it actually improving, and by how much?**
@@ -51,7 +51,7 @@ topic → Brief → [gate] → Scoring:select → Showrunner:outline → Researc
                                   └─────── repair ──────┘
 ```
 
-- **Brief** turns a vague topic into a spec sheet — format, cast, voices, duration, tone.
+- **Brief** turns a vague topic into a full proposed plan — intent, format, tone, cast, voices, duration — every field decided and every field editable.
 - **Scoring** picks a track *first*, from a pre-scored library, and hands over an exact beat grid and the drop position.
 - **Showrunner** outlines the arc against that drop, flags which beats need facts, then writes the dialogue and cuts once **Research** has sourced them.
 - **Casting** and **Voice** produce assets; measured audio durations are absorbed by holds and slack, not by re-planning.
@@ -64,21 +64,23 @@ Two gates, both on text, and how chatty they are is one number: **`involvement: 
 
 ---
 
-## Formats
+## Intent, format, tone
 
-A format is not a prompt — it's a set of constraints the planner has to satisfy, and that the QC gate verifies.
+"Make a video about AI agents" admits many different videos. The system resolves that into three choices, proposes all of them at once, and lets you change any of them. No wizard — you see the whole plan, already decided.
 
-| Format | Cast | Constraints |
+**Intent** — what it's trying to accomplish. Three, closed, each putting fact-checking in a different regime:
+
+| Intent | Grounding | |
 |---|---|---|
-| Solo explainer | 1 | VO-continuous, hook ≤ 3s, one idea per shot |
-| Two-host podcast | 2 | Turn-taking, 4–12s turns, one interruption |
-| Interview | 2 | Asymmetric knowledge — host asks, guest answers |
-| Debate | 2 | Opposing positions, tension escalating to the drop |
-| Skit | 2–3 | Scene continuity, a setup and a turn |
+| **Explainer** | Most claims sourced | Education, news, how-things-work |
+| **Comedy** | Few or none — a low score is *correct* | Skits, bits, satire |
+| **Commentary** | Arguable claims, sources back a position | Opinion, analysis |
 
-The catalog is closed — Brief picks one of the five and cannot invent a sixth, which is what keeps pass rate comparable across runs. What it *can* do is tune the parameters within a format's legal range, narrowing a debate's turns from 4–12s to 3–9s for a topic that wants faster exchanges. **The QC rules then read their thresholds from the brief rather than from constants** — the alternative is a validator that disagrees with the plan it's validating.
+**Format** — how it's presented. Two, closed: **monologue** (1 speaker) and **debate** (2). **Tone** — engaging, professional, funny, dramatic, casual.
 
-Pass rate is tracked per format. The expectation is that it falls as cast size rises — measuring exactly how much is one of the more interesting things this project can report.
+The catalogs are closed — Brief cannot invent a fourth intent or a third format, which is what keeps pass rate comparable across runs. What it *can* do is tune parameters within a configuration's legal range. **The QC rules then read their thresholds from the brief rather than from constants** — the alternative is a validator that disagrees with the plan it's validating.
+
+Pass rate is tracked per intent and format, and never pooled across intents: they carry different thresholds, and Brief picks the intent, so a pooled number would hand Brief a lever on its own grade. The expectation is that it falls as cast size rises — measuring exactly how much is one of the more interesting things this project can report.
 
 ---
 
@@ -86,7 +88,7 @@ Pass rate is tracked per format. The expectation is that it falls as cast size r
 
 | Metric | What it tells you |
 |---|---|
-| QC pass rate, by format | Whether the planner handles complexity |
+| QC pass rate, per intent × format | Whether the planner handles complexity |
 | Repair rounds to green | Planning quality — better plans need fewer repairs |
 | Cost per finished reel | Whether the system is getting cheaper as it gets better |
 | Override rate at each gate | Where the agent's judgment is weakest |
@@ -94,7 +96,7 @@ Pass rate is tracked per format. The expectation is that it falls as cast size r
 
 ### Results
 
-> _Not yet populated — the eval harness lands in the week of Aug 21._
+> _Not yet populated — waiting on the eval sweep._
 > This section will carry the before-and-after curve from the improvement loop, and it is the headline of the project. Everything else is scaffolding for it.
 
 ---
@@ -104,8 +106,8 @@ Pass rate is tracked per format. The expectation is that it falls as cast size r
 | | |
 |---|---|
 | Models | Gemini (planning, grading, grounded search), Imagen (characters, backgrounds), Gemini TTS |
-| Music | Pre-scored library — beat grids and drop positions measured once, offline, exactly |
-| Agents | Google Cloud Agent Builder / ADK |
+| Music | Pre-scored library — beat grids and drop positions verified once, offline |
+| Orchestration | LangGraph — no model in it; it decides what runs when |
 | Observability | Grafana Cloud, via the Grafana MCP server at runtime |
 | Rendering | ffmpeg — deterministic, no model in the loop |
 
@@ -113,9 +115,9 @@ Built for [Agentic Cinema](https://agentic-cinema.devpost.com/), Grafana track. 
 
 **Three choices do most of the work on cost and trustworthiness.**
 
-Nothing is generated per frame. Each character is six drawings — five poses and a mouth-open variant — animated by arithmetic: a 5Hz talk cycle gated by audio amplitude, a bob at idle, hard cuts on beats. Frames are composited by ffmpeg on CPU, so **output frame rate is free**; 24, 30 and 60fps cost identically. The only thing that costs money is a distinct drawing. Renders run at 30fps, picked because it divides cleanly into the syllable band — not because it's cheaper.
+Nothing is generated per frame. Each character is nine drawings — eight poses and a mouth-open variant — animated by arithmetic: a 5Hz talk cycle gated by audio amplitude, a bob at idle, hard cuts on beats. Frames are composited by ffmpeg on CPU, so **output frame rate is free**; 24, 30 and 60fps cost identically. Renders run at 30fps, picked because it divides cleanly into the syllable band — not because it's cheaper.
 
-Those sprites are keyed on archetype and style rather than topic, so "a skeptic in flat vector" is drawn once and reused across every reel that needs one. That's about consistency first and cost second, but the cost difference is roughly 30× and the cache hit rate on an eval sweep lands near 95%. Backgrounds come from a library for the same reason — per-shot generated art barely caches, and would have become the most expensive stage the moment characters stopped being one.
+The cast is a fixture, established once at setup with you choosing and re-prompting until the characters are right, then stored. A roster of three is 27 drawings for every video the project will ever make, so identity consistency is structural rather than probabilistic — and character cost leaves the per-run budget entirely. **Backgrounds are the variable**: generated fresh every run, never reused across reels, because with the cast fixed they carry all of a reel's visual identity.
 
 Music is selected, not generated. A generated track needs beat detection, and detection error produces alignment failures that have nothing to do with planning quality — which makes the headline metric untrustworthy. With a pre-scored library the grid is ground truth, so **every beat-alignment failure is a real planning failure.** Generation can be swapped back in later; the interface downstream is `{track, grid, drop_s}` either way.
 
@@ -123,16 +125,16 @@ Music is selected, not generated. A generated track needs beat detection, and de
 
 ## Status
 
-**In development.** Targeting submission September 7, 2026.
+**In development.**
 
 | | |
 |---|---|
-| Aug 4–6 | Spike — Gemini → Grafana MCP, quota and pricing confirmed, music library scored |
-| Aug 7–13 | Harness core, single-narrator spine end to end |
-| Aug 14–20 | QC gate and the repair loop |
-| Aug 21–27 | Second speaker, eval harness, first pass-rate number |
-| Aug 28–Sep 3 | Improvement loop, deployment |
-| Sep 4–5 | Demo, writeup, submit |
+| ✅ | Compositor — 30fps sprite animation, beat-accurate cuts, deterministic render |
+| ✅ | Harness — budget enforced before execution, verbatim trajectory recording, closed tool registry |
+| ✅ | Pipeline runs end to end; the repair loop closes on a real violation |
+| 🟡 | Two of eleven QC rules implemented |
+| ⬜ | The pre-scored music library — synthetic fixtures stand in for now |
+| ⬜ | Eval sweep, Grafana panels, the improvement loop |
 
 The harness is intended to be usable on its own. It lives in its own package with no video-domain imports — short-form video is the first thing driving it, not the only thing it can drive.
 
