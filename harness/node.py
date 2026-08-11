@@ -92,8 +92,15 @@ def stage(
     recorder: Recorder,
     registry: dict,
     writes: set[str] | None = None,
+    estimate: Callable[[Production], float] | None = None,
 ) -> Callable[[Production], dict]:
-    """Wrap a stage function into a LangGraph node."""
+    """Wrap a stage function into a pipeline node.
+
+    `estimate` lets a stage say what this particular call will cost, rather than
+    always reserving the typical figure. A stage that re-runs cheaply — QC on a
+    repair round, where the arithmetic is free and the graders are cached — would
+    otherwise be refused on its second call by a cap sized for one full pass.
+    """
 
     cap = CAPS[name]
 
@@ -103,8 +110,9 @@ def stage(
         t0 = time.time()
 
         # --- budget, before anything is spent
+        est = estimate(state) if estimate else cap.est
         try:
-            ledger.check(name, cap.est)
+            ledger.check(name, est)
         except (BudgetExceeded, RunTotalExceeded) as exc:
             recorder.breach(name, cap.on_breach, str(exc))
 

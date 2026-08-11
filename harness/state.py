@@ -50,7 +50,10 @@ class Production(TypedDict, total=False):
     # --- QC and repair
     violations: list[dict]
     repair_round: int
+    repaired: bool            # did the last repair change anything
     applicable_rules: list[str]
+    phase: str                # which QC gate last ran: plan | render
+    grades: dict              # cached grader verdict + content fingerprint
     outcome: Literal["green", "escalated", "aborted", ""]
 
     # --- bookkeeping

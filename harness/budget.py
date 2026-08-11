@@ -40,7 +40,8 @@ CAPS: dict[str, Cap] = {
     "voice":            Cap(0.015, 0.012, DEGRADE,  "~35s of TTS, nearly fixed"),
     "envelope":         Cap(0.005, 0.002, DEGRADE,  "one call, or deterministic"),
     "compositor":       Cap(0.000, 0.000, ABORT,    "ffmpeg on CPU — free"),
-    "qc":               Cap(0.010, 0.009, ABORT,    "NEVER degrades: a partial judge is worse than none"),
+    "qc_plan":          Cap(0.000, 0.000, ABORT,    "pure arithmetic on the EDL — the cheap gate, free"),
+    "qc_render":        Cap(0.010, 0.009, ABORT,    "two graders. NEVER degrades: a partial judge is worse than none"),
     "repair":           Cap(0.015, 0.004, ESCALATE, "run-level pool — three cheap rounds fit"),
 }
 

@@ -21,13 +21,33 @@ from pipeline import stages, tools
 MAX_REPAIR_ROUNDS = 3
 
 
-def _after_qc(state: Production) -> str:
-    """The only branch in the system."""
+def _after_qc_plan(state: Production) -> str:
+    """The cheap gate: fix planning errors before any asset is generated."""
+    if not state.get("violations"):
+        return "gate2"
+    if state["repair_round"] >= MAX_REPAIR_ROUNDS:
+        return "gate2"          # out of rounds — let the human see it at the gate
+    return "repair"
+
+
+def _after_qc_render(state: Production) -> str:
     if not state.get("violations"):
         return "green"
     if state["repair_round"] >= MAX_REPAIR_ROUNDS:
         return "escalate"
     return "repair"
+
+
+def _after_repair(state: Production) -> str:
+    """Back to whichever gate sent us here. Plan repairs never re-render.
+
+    A repair that fixed nothing means no implementation owns these violations.
+    Looping would spend three rounds to reach the same answer, so escalate now
+    and ship the report — the failure is legible either way.
+    """
+    if not state.get("repaired"):
+        return "escalate"
+    return "qc_plan" if state.get("phase") == "plan" else "compositor"
 
 
 def _green(state: Production) -> dict:
@@ -48,14 +68,15 @@ TOPOLOGY = {
     "scoring_select": "outline",
     "outline":        "research",
     "research":       "script",
-    "script":         "gate2",
+    "script":         "qc_plan",
+    "qc_plan":        _after_qc_plan,   # gate2 | repair
     "gate2":          "casting",
     "casting":        "voice",
     "voice":          "envelope",
     "envelope":       "compositor",
-    "compositor":     "qc",
-    "qc":             _after_qc,      # green | repair | escalate
-    "repair":         "compositor",   # scoped fix, then recompose and re-check
+    "compositor":     "qc_render",
+    "qc_render":      _after_qc_render,  # green | repair | escalate
+    "repair":         _after_repair,     # qc_plan | compositor
     "green":          None,
     "escalate":       None,
 }
@@ -76,17 +97,22 @@ WRITES = {
     "voice":          {"audio"},
     "envelope":       {"envelope"},
     "compositor":     {"render"},
-    "qc":             {"violations"},
-    "repair":         {"edl", "repair_round"},
+    "qc_plan":        {"violations", "phase"},
+    "qc_render":      {"violations", "phase", "grades"},
+    "repair":         {"edl", "repair_round", "repaired"},
 }
 
 
 def build(run_id: str, ledger: Ledger, recorder: Recorder) -> Pipeline:
     registry = tools.build_registry()
 
+    # A stage may declare what a particular call will cost; see harness.node.
+    estimators = {"qc_render": stages.qc_render_estimate}
+
     nodes = {
         name: stage(name, getattr(stages, name), ledger=ledger, recorder=recorder,
-                    registry=registry, writes=writes)
+                    registry=registry, writes=writes,
+                    estimate=estimators.get(name))
         for name, writes in WRITES.items()
     }
     nodes["green"] = _green

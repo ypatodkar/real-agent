@@ -15,6 +15,7 @@ the spike, wired in as-is.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import pathlib
 import sys
@@ -22,6 +23,7 @@ import sys
 import yaml
 
 from harness.model import get_client
+from qc import graders, rules
 from harness.node import Ctx
 from harness.state import Production
 
@@ -116,13 +118,12 @@ def brief(state: Production, ctx: Ctx) -> dict:
         out["invalid_reason"] = invalid
         ctx.note(f"brief_invalid: {invalid} — recorded, not blocking")
 
-    rules = ["beat_alignment", "duration_adherence"]
-    if cast_size >= 2:
-        rules += ["speaker_attribution", "screen_time_balance"]
+    applicable = rules.applicable(out)
 
-    return {"brief": out, "applicable_rules": sorted(rules),
+    return {"brief": out, "applicable_rules": applicable,
             "log": [f"brief: {out['intent']} · {out['format']} · {out['tone']}"
-                    f"{' [INVALID]' if invalid else ''}"]}
+                    f"{' [INVALID]' if invalid else ''} · "
+                    f"{len(applicable)} applicable rules"]}
 
 
 def scoring_select(state: Production, ctx: Ctx) -> dict:
@@ -214,49 +215,108 @@ def envelope(state: Production, ctx: Ctx) -> dict:
 
 
 def compositor(state: Production, ctx: Ctx) -> dict:
-    """Not a stub. The proven spike renderer, deterministic, $0."""
-    result = ctx.tool("render", edl=state["edl"])
-    return {"render": result,
-            "log": [f"composite: {result['n_frames']} frames, hash {result['frame_hash'][:12]}"]}
+    """Not a stub. The proven spike renderer, deterministic, $0.
+
+    Also applies the envelope Scoring declared — the Compositor decides nothing,
+    it executes. That is what leaves `music_ducking` a real claim to verify.
+    """
+    frames = ctx.tool("render", edl=state["edl"])
+    mix = ctx.tool("mix_audio",
+                   duck_db=state["envelope"]["duck_db"],
+                   spans=state["audio"]["spans"],
+                   target_lufs=state["brief"]["params"].get("target_lufs", -14.0))
+    return {"render": {**frames, "mix": mix},
+            "log": [f"composite: {frames['n_frames']} frames, hash {frames['frame_hash'][:12]}"
+                    f" · mix {mix['lufs_after']} LUFS"]}
 
 
 # ----------------------------------------------------------------- QC + repair
 
 
-def qc(state: Production, ctx: Ctx) -> dict:
-    """Real rules from the spike. Denominator is applicable_rules, not eleven."""
-    edl = state["edl"]
-    beats = state["track"]["beats"]
+def _score(state: Production, phase: str, violations: list[dict]) -> str:
+    """Pass rate over applicable rules for this phase — a rate, not a count."""
+    in_phase = [r.id for r in rules.RULES
+                if r.phase == phase and r.id in set(state["applicable_rules"])]
+    if phase == rules.RENDER:
+        in_phase += [r for r in ("grounding", "coherence") if r in state["applicable_rules"]]
+    failed = {v["rule_id"] for v in violations} & set(in_phase)
+    return f"{len(in_phase) - len(failed)}/{len(in_phase)}"
 
-    violations = spike.check_beat_alignment(edl, beats) + spike.check_duration(edl)
+
+def qc_plan(state: Production, ctx: Ctx) -> dict:
+    """The cheap gate. Reads only the EDL, so it runs before a pixel exists.
+
+    A planning error caught here costs one scoped text repair instead of a
+    wasted round of image and speech generation.
+    """
+    violations = rules.run(rules.PLAN, state)
     for v in violations:
         ctx.recorder.violation(v)
 
-    applicable = [r for r in state["applicable_rules"]
-                  if r in {"beat_alignment", "duration_adherence"}]  # implemented so far
-    failed = {v["rule_id"] for v in violations}
-    passed = len(applicable) - len(failed & set(applicable))
-
+    failed = sorted({v["rule_id"] for v in violations})
     return {
         "violations": violations,
-        "log": [f"qc round {state['repair_round']}: {passed}/{len(applicable)} applicable rules pass"
-                + (f" — failing: {sorted(failed)}" if failed else "")],
+        "phase": rules.PLAN,
+        "log": [f"qc:plan round {state['repair_round']}: "
+                f"{_score(state, rules.PLAN, violations)} pass"
+                + (f" — failing: {failed}" if failed else "") + "  (no assets yet)"],
     }
 
 
-REPAIR_OWNER = {
-    "beat_alignment": "showrunner",     # always. Never Scoring — see decision log.
-    "duration_adherence": "showrunner",
-    "reading_speed": "showrunner",
-    "pacing_curve": "showrunner",
-    "screen_time_balance": "showrunner",
-    "coherence": "showrunner",
-    "speaker_attribution": "voice",
-    "identity_drift": "casting",
-    "music_ducking": "scoring",
-    "loudness_spec": "scoring",
-    "grounding": "research",
-}
+def _graded_fingerprint(state: Production) -> str:
+    """What the graders actually judge: the words and the sourcing.
+
+    A retime moves a cut; it changes neither. Re-grading after one would spend
+    a model call to get the same verdict back.
+    """
+    payload = json.dumps({
+        "lines": [s["layers"] for s in state.get("edl", {}).get("shots", [])],
+        "claims": sorted(c["id"] for c in state.get("claims", [])),
+        "turn": state.get("outline", {}).get("turn_at_s"),
+        "grader": graders.GRADER_VERSION,
+    }, sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+
+def qc_render_estimate(state: Production) -> float:
+    """Free on a re-run whose content the graders have already judged."""
+    cached = state.get("grades") or {}
+    return 0.0 if cached.get("fingerprint") == _graded_fingerprint(state) else 0.009
+
+
+def qc_render(state: Production, ctx: Ctx) -> dict:
+    """Rules that need real audio or pixels, plus the two pinned graders.
+
+    The arithmetic rules re-run every round because they are free. The graders
+    re-run only when the content they judge has actually changed.
+    """
+    violations = rules.run(rules.RENDER, state)
+
+    fingerprint = _graded_fingerprint(state)
+    cached = state.get("grades") or {}
+    if cached.get("fingerprint") == fingerprint:
+        ctx.note(f"graders skipped — content unchanged since {fingerprint}")
+        graded = cached["violations"]
+    else:
+        graded = graders.grade(
+            state,
+            lambda prompt, stub: _call(ctx, prompt, stub=stub, fallback_cost=0.0045),
+        )
+        cached = {"fingerprint": fingerprint, "violations": graded}
+
+    violations += graded
+    for v in violations:
+        ctx.recorder.violation(v)
+
+    failed = sorted({v["rule_id"] for v in violations})
+    return {
+        "violations": violations,
+        "grades": cached,
+        "phase": rules.RENDER,
+        "log": [f"qc:render round {state['repair_round']}: "
+                f"{_score(state, rules.RENDER, violations)} pass"
+                + (f" — failing: {failed}" if failed else "")],
+    }
 
 
 def repair(state: Production, ctx: Ctx) -> dict:
@@ -266,7 +326,7 @@ def repair(state: Production, ctx: Ctx) -> dict:
     fixed = []
 
     for v in state["violations"]:
-        owner = REPAIR_OWNER[v["rule_id"]]
+        owner = rules.OWNER[v['rule_id']]
         if v["rule_id"] != "beat_alignment":
             ctx.note(f"{v['rule_id']} -> {owner}: no repair implemented yet")
             continue
@@ -281,5 +341,12 @@ def repair(state: Production, ctx: Ctx) -> dict:
     _call(ctx, f"Retime shots {fixed} onto the nearest beat. Change nothing else.",
           stub={"shots": fixed}, fallback_cost=0.004)
 
+    unowned = sorted({v["rule_id"] for v in state["violations"]} - {"beat_alignment"})
+    if unowned and not fixed:
+        ctx.note(f"no repair implemented for {unowned} — escalating rather than looping")
+
     return {"edl": edl, "repair_round": state["repair_round"] + 1,
-            "log": [f"repair round {state['repair_round'] + 1}: retimed {fixed or 'nothing'}"]}
+            "repaired": bool(fixed),
+            "log": [f"repair round {state['repair_round'] + 1}: "
+                    + (f"retimed {fixed}" if fixed
+                       else f"nothing to do — {unowned} has no repair path")]}
