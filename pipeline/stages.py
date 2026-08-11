@@ -23,6 +23,7 @@ import sys
 import yaml
 
 from harness.model import get_client
+from pipeline import edl as edl_builder
 from qc import graders, rules
 from harness.node import Ctx
 from harness.state import Production
@@ -171,14 +172,70 @@ def research(state: Production, ctx: Ctx) -> dict:
     return {"claims": claims, "log": [f"research: {len(claims)} claims for {len(flagged)} beats"]}
 
 
+SCRIPT_SYSTEM = """You write dialogue for short-form video. You are given a
+topic, an intent, a cast, a beat grid and the sourced claims.
+
+Write ONE line per beat. Each line must be speakable in the seconds allotted —
+roughly 15 characters per second, so a 2.5s line is about 35 characters. Short
+is better than clever.
+
+For a debate, alternate speakers and give them opposing positions. For a
+monologue, one voice throughout.
+
+Return JSON: {"lines": [{"speaker": "<character_id>", "text": str,
+"emotion": "dry|wry|flat|curious|excited|earnest|amused|surprised|emphatic",
+"claim_refs": [str]}]}"""
+
+
+def _stub_lines(state: Production) -> dict:
+    """Topic-derived placeholder dialogue, so stubbed runs still differ by input."""
+    topic = state["topic"].rstrip("?.").strip()
+    cast = state["brief"]["cast"]
+    claims = [c["id"] for c in state.get("claims", [])]
+
+    beats = [
+        (f"Everyone has an opinion about {topic}.", "wry", []),
+        ("Most of them are guesses.", "dry", claims[:1]),
+        (f"So what does {topic} actually come down to?", "curious", []),
+        ("Evidence, mostly. And there is some.", "earnest", claims[1:2]),
+        ("Which is not the same as a consensus.", "dry", []),
+        ("No. But it is a start.", "amused", []),
+    ]
+    return {"lines": [
+        {"speaker": cast[i % len(cast)]["character_id"],
+         "text": text, "emotion": emotion, "claim_refs": refs}
+        for i, (text, emotion, refs) in enumerate(beats)
+    ]}
+
+
 def script(state: Production, ctx: Ctx) -> dict:
-    """Stub: loads the hand-written EDL from the spike, including its planted 80ms error."""
-    edl = yaml.safe_load((ROOT / "spike" / "demo.edl.yaml").read_text())
-    edl["shots"].sort(key=lambda s: s["in_s"])
-    _call(ctx, f"Write dialogue for {len(edl['shots'])} shots on the beat grid.",
-          stub={"shots": len(edl["shots"])}, fallback_cost=0.023)
-    return {"edl": edl, "script": {"lines": len(edl["shots"])},
-            "log": [f"script: {len(edl['shots'])} shots on the grid"]}
+    """Dialogue from the model; shot placement from the beat grid.
+
+    Splitting it this way is what makes `beat_alignment` meaningful — cuts land
+    on measured beats by construction, so a failure is a genuine planning error
+    rather than a model being careless with numbers.
+    """
+    brief, track = state["brief"], state["track"]
+    n_beats = len([b for b in track["beats"] if b < brief["duration_s"]])
+
+    result = _call(
+        ctx,
+        f"Topic: {state['topic']}\nIntent: {brief['intent']} · {brief['format']} · "
+        f"{brief['tone']}\nCast: {[c['character_id'] for c in brief['cast']]}\n"
+        f"Duration: {brief['duration_s']}s over {n_beats} beats at "
+        f"{track['bpm']} BPM, drop at {track['drop_s']}s\n"
+        f"Claims available: {[c['id'] for c in state.get('claims', [])]}",
+        system=SCRIPT_SYSTEM,
+        stub=_stub_lines(state),
+        fallback_cost=0.023,
+    )
+
+    lines = result.get("lines") or _stub_lines(state)["lines"]
+    built = edl_builder.build(brief=brief, track=track, lines=lines)
+
+    return {"edl": built, "script": {"lines": lines},
+            "log": [f"script: {len(lines)} lines -> {len(built['shots'])} shots "
+                    f"on the grid, {len({l['layers'][0]['scene_id'] for l in built['shots']})} scenes"]}
 
 
 # ----------------------------------------------------------------- assets
@@ -220,14 +277,15 @@ def compositor(state: Production, ctx: Ctx) -> dict:
     Also applies the envelope Scoring declared — the Compositor decides nothing,
     it executes. That is what leaves `music_ducking` a real claim to verify.
     """
-    frames = ctx.tool("render", edl=state["edl"])
     mix = ctx.tool("mix_audio",
                    duck_db=state["envelope"]["duck_db"],
                    spans=state["audio"]["spans"],
                    target_lufs=state["brief"]["params"].get("target_lufs", -14.0))
+    frames = ctx.tool("render", edl=state["edl"], run_id=state["run_id"], audio=mix["path"])
     return {"render": {**frames, "mix": mix},
-            "log": [f"composite: {frames['n_frames']} frames, hash {frames['frame_hash'][:12]}"
-                    f" · mix {mix['lufs_after']} LUFS"]}
+            "log": [f"composite: {frames['n_frames']} frames · {len(frames['scenes'])} scenes · "
+                    f"{mix['lufs_after']} LUFS · {frames['size_kb']} KB "
+                    f"-> {pathlib.Path(frames['path']).name}"]}
 
 
 # ----------------------------------------------------------------- QC + repair
@@ -326,22 +384,29 @@ def repair(state: Production, ctx: Ctx) -> dict:
     fixed = []
 
     for v in state["violations"]:
-        owner = rules.OWNER[v['rule_id']]
-        if v["rule_id"] != "beat_alignment":
-            ctx.note(f"{v['rule_id']} -> {owner}: no repair implemented yet")
-            continue
+        rule, owner = v["rule_id"], rules.OWNER[v["rule_id"]]
+        shot_id = v.get("evidence", {}).get("shot")
 
-        shot_id = v["evidence"]["shot"]
-        shot = next(s for s in edl["shots"] if s["id"] == shot_id)
-        snapped = min(beats, key=lambda b: abs(b - shot["in_s"]))
-        ctx.note(f"{shot_id}: in_s {shot['in_s']} -> {snapped} (owner: {owner})")
-        shot["in_s"] = snapped
-        fixed.append(shot_id)
+        if rule == "beat_alignment":
+            edl = edl_builder.retime(edl, beats, shot_id)
+            ctx.note(f"{shot_id}: snapped to nearest beat (owner: {owner})")
+            fixed.append(f"{shot_id}:retime")
+
+        elif rule == "reading_speed":
+            max_cps = v["evidence"]["threshold_cps"]
+            new = edl_builder.shorten_caption(edl, shot_id, max_cps)
+            if new:
+                ctx.note(f"{shot_id}: caption shortened to {len(new)} chars (owner: {owner})")
+                fixed.append(f"{shot_id}:shorten")
+
+        else:
+            ctx.note(f"{rule} -> {owner}: no repair implemented yet")
 
     _call(ctx, f"Retime shots {fixed} onto the nearest beat. Change nothing else.",
           stub={"shots": fixed}, fallback_cost=0.004)
 
-    unowned = sorted({v["rule_id"] for v in state["violations"]} - {"beat_alignment"})
+    unowned = sorted({v["rule_id"] for v in state["violations"]}
+                     - {"beat_alignment", "reading_speed"})
     if unowned and not fixed:
         ctx.note(f"no repair implemented for {unowned} — escalating rather than looping")
 

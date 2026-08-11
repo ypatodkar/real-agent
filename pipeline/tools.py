@@ -127,24 +127,50 @@ def _integrated_lufs(path: pathlib.Path) -> float | None:
     return float(found[-1]) if found else None
 
 
-def render(edl: dict) -> dict:
-    """The proven compositor. Deterministic, ffmpeg on CPU, $0."""
+def render(edl: dict, run_id: str = "latest", audio: str | None = None) -> dict:
+    """The proven compositor. Deterministic, ffmpeg on CPU, $0.
+
+    Scenes are keyed by scene_id, so a plate is generated once per scene and
+    reused across every shot in it — dedupe within the reel, no reuse across runs.
+    """
     import sys
     sys.path.insert(0, str(ROOT / "spike"))
     import render as spike
 
     sprites = spike.load_sprites()
-    plates = {sid: spike.make_plate(sid) for sid in spike.SCENES}
     fnt = spike.font(40)
     fps = edl["meta"]["fps"]
     n = int(edl["meta"]["duration_s"] * fps)
     env = spike.vo_envelope(ASSETS / "fixtures" / "vo.wav", fps, n)
 
-    digest = hashlib.sha256()
-    for i in range(n):
-        digest.update(spike.render_frame(edl, sprites, plates, fnt, i, fps, env).tobytes())
+    scene_ids = sorted({l["scene_id"] for s in edl["shots"]
+                        for l in s["layers"] if l["type"] == "bg"})
+    plates = {sid: spike.make_plate(sid) for sid in scene_ids}
 
-    return {"n_frames": n, "fps": fps, "frame_hash": digest.hexdigest(), "cost": 0.0}
+    OUT.mkdir(exist_ok=True)
+    digest = hashlib.sha256()
+    frames = []
+    for i in range(n):
+        raw = spike.render_frame(edl, sprites, plates, fnt, i, fps, env).tobytes()
+        digest.update(raw)
+        frames.append(raw)
+
+    path = OUT / f"{run_id}.mp4"
+    cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+           "-f", "rawvideo", "-pix_fmt", "rgb24",
+           "-s", f"{spike.W}x{spike.H}", "-r", str(fps), "-i", "-"]
+    if audio and pathlib.Path(audio).exists():
+        cmd += ["-i", audio, "-c:a", "aac", "-b:a", "160k", "-shortest"]
+    cmd += ["-c:v", "libx264", "-preset", "medium", "-crf", "20",
+            "-pix_fmt", "yuv420p", str(path)]
+
+    proc = subprocess.run(cmd, input=b"".join(frames), capture_output=True)
+    if proc.returncode:
+        raise RuntimeError(proc.stderr.decode()[:600])
+
+    return {"n_frames": n, "fps": fps, "frame_hash": digest.hexdigest(),
+            "path": str(path), "size_kb": round(path.stat().st_size / 1024),
+            "scenes": scene_ids, "cost": 0.0}
 
 
 def build_registry() -> dict:

@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Second Unit</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="slug">
+  <div class="slug-top">
+    <span>Second Unit</span>
+    <span id="runid">no run yet</span>
+  </div>
+  <h1>Give it a topic.</h1>
+  <p class="sub">It proposes what kind of video that should be. You change anything you disagree with.</p>
+</header>
+
+<main>
+
+  <!-- ---------------------------------------------------------- compose -->
+  <section class="panel" id="compose">
+    <label class="field">
+      <span class="lbl">Topic</span>
+      <textarea id="topic" rows="2" placeholder="why do most AI agents fail in production"></textarea>
+    </label>
+
+    <label class="field">
+      <span class="lbl">
+        How chatty <output id="invOut">0</output>
+        <em id="invHint">never interrupts — the eval path</em>
+      </span>
+      <input type="range" id="involvement" min="0" max="10" step="1" value="0">
+    </label>
+
+    <button id="go">Generate</button>
+    <p class="note" id="composeNote">Runs the full pipeline: plan, check, repair, render.</p>
+  </section>
+
+  <!-- ---------------------------------------------------------- stages -->
+  <section class="panel" id="progress" hidden>
+    <h2>Pipeline</h2>
+    <ol class="stages" id="stages"></ol>
+    <div class="meter">
+      <span class="lbl">Spend</span>
+      <div class="bar"><div id="spendBar"></div></div>
+      <span class="num" id="spendNum">$0.0000</span>
+    </div>
+  </section>
+
+  <!-- ---------------------------------------------------------- gate -->
+  <section class="panel gate" id="gate" hidden>
+    <h2 id="gateName">Gate</h2>
+    <p class="note">Every field is decided. Change what you disagree with, then continue.</p>
+    <div class="grid" id="gateFields"></div>
+    <details id="gatePlan" hidden>
+      <summary>Show the full proposal</summary>
+      <pre id="gateJson"></pre>
+    </details>
+    <div class="row">
+      <button id="accept">Accept &amp; continue</button>
+      <button id="applyEdits" class="ghost">Apply edits &amp; continue</button>
+    </div>
+  </section>
+
+  <!-- ---------------------------------------------------------- result -->
+  <section class="panel" id="result" hidden>
+    <h2>Result</h2>
+    <div class="verdict" id="verdict"></div>
+
+    <div class="split">
+      <div>
+        <h3>Quality checks</h3>
+        <ul class="rules" id="rules"></ul>
+      </div>
+      <div>
+        <h3>Video</h3>
+        <video id="video" controls playsinline></video>
+        <p class="note" id="videoNote"></p>
+      </div>
+    </div>
+
+    <details>
+      <summary>Run log</summary>
+      <pre id="log"></pre>
+    </details>
+  </section>
+
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

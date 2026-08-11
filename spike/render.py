@@ -77,7 +77,11 @@ def vo_envelope(path: pathlib.Path, fps: int, n_frames: int) -> np.ndarray:
 
 def make_plate(scene_id: str) -> Image.Image:
     """Procedural background. Real ones come from Imagen; the interface is the same."""
-    top, bottom, label = SCENES[scene_id]
+    if scene_id not in SCENES:                       # stable pick for unseen ids
+        key = list(SCENES)[sum(map(ord, scene_id)) % len(SCENES)]
+        top, bottom, label = SCENES[key]
+    else:
+        top, bottom, label = SCENES[scene_id]
     img = Image.new("RGB", (W, H), top)
     d = ImageDraw.Draw(img)
 
