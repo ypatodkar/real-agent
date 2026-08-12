@@ -2,7 +2,8 @@
 __pycache__/
 
 # Local config and secrets
-.claude/
+.claude/*
+!.claude/skills/          # skills are project config — they should travel
 .env
 .mcp.json
 
