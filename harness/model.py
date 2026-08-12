@@ -17,6 +17,12 @@ Backend selection, in order:
     SECOND_UNIT_BACKEND=aistudio + GOOGLE_API_KEY         -> Gemini Developer API
     neither                                               -> stub, no network
 
+GOOGLE_CLOUD_PROJECT wins over GOOGLE_API_KEY when both are set, so switching to
+Vertex is one added line and falling back is one comment. Vertex authenticates
+through ADC: either `gcloud auth application-default login`, or
+GOOGLE_APPLICATION_CREDENTIALS pointing at a service-account JSON — the latter
+needs no CLI at all, which is the console-only route.
+
 Which one your $100 actually covers is a billing question, not a code question.
 Credits are usually attached to a GCP billing account, which means Vertex.
 Confirm before the sweep, not after.
@@ -108,6 +114,16 @@ class GeminiClient:
 
         self.backend = "vertex" if vertex else "aistudio"
         if vertex:
+            # Credentials come from ADC, which is either
+            #   gcloud auth application-default login   (CLI route), or
+            #   GOOGLE_APPLICATION_CREDENTIALS -> a service-account JSON (web route).
+            # Either way google-auth resolves it; nothing key-shaped is read here.
+            creds = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+            if creds and not pathlib.Path(creds).exists():
+                raise ProviderError(
+                    f"GOOGLE_APPLICATION_CREDENTIALS points at {creds}, which does not exist",
+                    hint="check the path in .env, and that the JSON was moved there.",
+                )
             self._client = genai.Client(
                 vertexai=True,
                 project=os.environ["GOOGLE_CLOUD_PROJECT"],
@@ -178,6 +194,13 @@ _HINTS = {
         "console.cloud.google.com/apis/library/generativelanguage.googleapis.com "
         "for the project named in the error.",
     "API_KEY_INVALID":     "the key is malformed or has been revoked.",
+    "could not automatically determine credentials":
+        "Vertex found no credentials. Either run "
+        "`gcloud auth application-default login`, or set "
+        "GOOGLE_APPLICATION_CREDENTIALS to a service-account JSON path.",
+    "aiplatform.googleapis.com":
+        "enable the Vertex AI API on this project, and confirm the service "
+        "account has the 'Vertex AI User' role.",
     "prepayment credits are depleted":
         "AI Studio prepayment is at zero. This pool is SEPARATE from Google Cloud "
         "credits — GCP credit only applies via Vertex. Either top up at "
