@@ -14,6 +14,8 @@ the spike, wired in as-is.
 
 from __future__ import annotations
 
+from typing import Any
+
 import copy
 import hashlib
 import json
@@ -37,14 +39,34 @@ import render as spike  # noqa: E402  — the proven compositor
 MODEL = get_client()
 
 
+def _shape_ok(got: Any, want: Any) -> bool:
+    """Does `got` have the same shape as the fixture `want`?
+
+    A model asked for JSON returns valid JSON in whatever structure it likes.
+    Checking against the fixture means a deviation degrades to the stub instead
+    of exploding four stages later on a KeyError.
+    """
+    if isinstance(want, dict):
+        if not isinstance(got, dict) or not set(want).issubset(got):
+            return False
+        return all(_shape_ok(got[k], v) for k, v in want.items())
+    if isinstance(want, list):
+        if not isinstance(got, list) or not got:
+            return isinstance(got, list)
+        return _shape_ok(got[0], want[0]) if want else True
+    return True
+
+
 def _call(ctx: Ctx, prompt: str, *, stub: dict, fallback_cost: float,
-          system: str | None = None, grounded: bool = False) -> dict:
+          system: str | None = None, grounded: bool = False,
+          schema: Any = None, require: set[str] | None = None) -> dict:
     """One model call: real if credentials exist, the stub fixture if not.
 
     Either way the recorder sees a model_call with the verbatim payload, so the
     harness is exercised identically and a stubbed run stays replayable.
     """
-    resp = MODEL.generate(prompt, stub=stub, system=system, grounded=grounded)
+    resp = MODEL.generate(prompt, stub=stub, system=system, grounded=grounded,
+                          json_out=not grounded, schema=None if grounded else schema)
     cost = resp.cost if not resp.stub else fallback_cost
     ctx.spend(cost, {"prompt": prompt, "system": system, "grounded": grounded}, resp.raw)
 
@@ -52,10 +74,22 @@ def _call(ctx: Ctx, prompt: str, *, stub: dict, fallback_cost: float,
         ctx.note(f"grounding: {len(resp.grounding)} metadata block(s) recorded verbatim")
 
     try:
-        return resp.json()
-    except (ValueError, TypeError):
-        ctx.note("response was not JSON — falling back to the stub shape")
+        got = resp.json()
+    except (ValueError, TypeError) as exc:
+        # Worth shouting about: a silent fallback means the model was called and
+        # charged for, and none of what it said was used.
+        ctx.note(f"UNPARSEABLE response, using stub instead — {exc}. "
+                 f"First 200 chars: {(resp.text or '')[:200]!r}")
         return stub
+
+    # Check only what is actually needed. Demanding every fixture key rejects
+    # good responses over optional fields the model reasonably omitted.
+    expected = {k: v for k, v in stub.items() if require is None or k in require}
+    if not _shape_ok(got, expected):
+        ctx.note(f"WRONG SHAPE, using stub instead — wanted keys {sorted(expected)}, "
+                 f"got {sorted(got) if isinstance(got, dict) else type(got).__name__}")
+        return stub
+    return got
 
 
 # ----------------------------------------------------------------- planning
@@ -90,6 +124,59 @@ ROSTER_CAST = [
 ]
 
 
+BRIEF_SCHEMA = {
+    "type": "object",
+    "required": ["intent", "format", "tone", "duration_s"],
+    "properties": {
+        "intent":     {"type": "string", "enum": ["explainer", "comedy", "commentary"]},
+        "format":     {"type": "string", "enum": ["monologue", "debate"]},
+        "tone":       {"type": "string"},
+        "duration_s": {"type": "number"},
+        "confidence": {"type": "object", "properties": {
+            "intent": {"type": "number"}, "format": {"type": "number"},
+            "tone": {"type": "number"}}},
+        "assumptions": {"type": "array", "items": {"type": "string"}},
+        "params": {
+            "type": "object",
+            "required": ["turn_len_s", "beat_tolerance_ms", "max_hold_s", "bg_budget"],
+            "properties": {
+                "turn_len_s":        {"type": "array", "items": {"type": "number"}},
+                "beat_tolerance_ms": {"type": "number"},
+                "max_hold_s":        {"type": "number"},
+                "bg_budget":         {"type": "number"},
+            },
+        },
+    },
+}
+
+OUTLINE_SCHEMA = {
+    "type": "object",
+    "required": ["beats", "turn_at_s"],
+    "properties": {
+        "beats": {"type": "array", "items": {
+            "type": "object",
+            "required": ["id", "role", "needs_fact"],
+            "properties": {"id": {"type": "string"}, "role": {"type": "string"},
+                           "needs_fact": {"type": "boolean"},
+                           "at_s": {"type": "number"}}}},
+        "turn_at_s": {"type": "number"},
+    },
+}
+
+SCRIPT_SCHEMA = {
+    "type": "object",
+    "required": ["lines"],
+    "properties": {
+        "lines": {"type": "array", "items": {
+            "type": "object",
+            "required": ["speaker", "text", "emotion"],
+            "properties": {"speaker": {"type": "string"}, "text": {"type": "string"},
+                           "emotion": {"type": "string"},
+                           "claim_refs": {"type": "array", "items": {"type": "string"}}}}},
+    },
+}
+
+
 def brief(state: Production, ctx: Ctx) -> dict:
     topic = state["topic"]
     probe = ctx.tool("topic_probe", topic=topic)
@@ -100,6 +187,8 @@ def brief(state: Production, ctx: Ctx) -> dict:
         f"Return JSON with exactly these keys: {sorted(BRIEF_STUB)}",
         system=BRIEF_SYSTEM,
         stub=BRIEF_STUB,
+        schema=BRIEF_SCHEMA,
+        require={"intent", "format", "tone", "duration_s"},
         fallback_cost=0.004,
     )
 
@@ -109,6 +198,17 @@ def brief(state: Production, ctx: Ctx) -> dict:
         invalid.append(f"intent {out.get('intent')!r} not in catalog")
     if out.get("format") not in ("monologue", "debate"):
         invalid.append(f"format {out.get('format')!r} not in catalog")
+
+    # The model proposed 150s on one run. Short-form has a hard ceiling, and a
+    # duration outside it is a brief error worth recording rather than obeying.
+    requested = float(out.get("duration_s") or 15.0)
+    out["duration_s"] = max(10.0, min(requested, 60.0))
+    if out["duration_s"] != requested:
+        invalid.append(f"duration_s {requested}s clamped to {out['duration_s']}s")
+
+    # params are ours: QC reads thresholds from here, so defaults always apply.
+    out["params"] = {**BRIEF_STUB["params"], **(out.get("params") or {})}
+    out.setdefault("assumptions", [])
 
     cast_size = 1 if out.get("format") == "monologue" else 2
     out.setdefault("params", {})["cast_size"] = cast_size
@@ -148,7 +248,7 @@ def outline(state: Production, ctx: Ctx) -> dict:
     }
     out = _call(ctx, f"Beat grid drop at {drop}s. Structure 4 beats, turn on the drop. "
                      f"Flag beats needing a checkable fact.",
-                stub=out, fallback_cost=0.008)
+                stub=out, schema=OUTLINE_SCHEMA, fallback_cost=0.008)
     flagged = sum(b["needs_fact"] for b in out["beats"])
     return {"outline": out, "log": [f"outline: 4 beats, turn on drop, {flagged} need facts"]}
 
@@ -165,9 +265,20 @@ def research(state: Production, ctx: Ctx) -> dict:
          "source": "https://example.invalid/stub"}
         for i, b in enumerate(flagged, 1)
     ]
-    got = _call(ctx, f"Source these beats with checkable claims: "
-                     f"{[b['id'] for b in flagged]}",
-                stub={"claims": claims}, fallback_cost=0.017, grounded=True)
+    beat_desc = "\n".join(
+        f"  {b['id']} ({b.get('role', 'beat')}): what is worth verifying here?"
+        for b in flagged
+    )
+    got = _call(
+        ctx,
+        f"Topic: {state['topic']}\n\n"
+        f"Find one checkable, sourced fact for each of these story beats:\n{beat_desc}\n\n"
+        f"Search for real sources. Respond with JSON only, no commentary, in exactly "
+        f"this shape:\n"
+        f'{{"claims": [{{"id": "c_01", "beat": "<beat id>", "text": "<the claim>", '
+        f'"source": "<url>"}}]}}',
+        stub={"claims": claims}, fallback_cost=0.017, grounded=True,
+    )
     claims = got.get("claims", claims)
     return {"claims": claims, "log": [f"research: {len(claims)} claims for {len(flagged)} beats"]}
 
@@ -203,7 +314,7 @@ def _stub_lines(state: Production) -> dict:
     ]
     return {"lines": [
         {"speaker": cast[i % len(cast)]["character_id"],
-         "text": text, "emotion": emotion, "claim_refs": refs}
+         "text": text, "emotion": emotion}
         for i, (text, emotion, refs) in enumerate(beats)
     ]}
 
@@ -227,6 +338,8 @@ def script(state: Production, ctx: Ctx) -> dict:
         f"Claims available: {[c['id'] for c in state.get('claims', [])]}",
         system=SCRIPT_SYSTEM,
         stub=_stub_lines(state),
+        schema=SCRIPT_SCHEMA,
+        require={"lines"},
         fallback_cost=0.023,
     )
 
@@ -251,8 +364,7 @@ def casting(state: Production, ctx: Ctx) -> dict:
 
     roster = ctx.tool("roster_lookup", character_ids=[c["character_id"] for c in state["brief"]["cast"]])
     plates = ctx.tool("generate_plates", scene_ids=scenes)
-    _call(ctx, f"Describe background plates for scenes {scenes}.",
-          stub={"plates": plates}, fallback_cost=0.003)
+    # No model call: plate generation is keyed on scene_id and decides nothing.
 
     return {"assets": {"sprites": roster, "plates": plates},
             "log": [f"casting: {roster['n_sprites']} sprites (lookup, $0), "
@@ -261,13 +373,13 @@ def casting(state: Production, ctx: Ctx) -> dict:
 
 def voice(state: Production, ctx: Ctx) -> dict:
     spans = ctx.tool("measure_vo", path=str(ASSETS / "fixtures" / "vo.wav"))
-    _call(ctx, "Synthesize and measure the VO.", stub=spans, fallback_cost=0.012)
+    # No model call. Measuring durations is arithmetic — the absorption ladder
+    # handles drift, and Voice only wakes a model on escalation.
     return {"audio": spans, "log": [f"voice: {spans['n_spans']} spans measured"]}
 
 
 def envelope(state: Production, ctx: Ctx) -> dict:
-    env = _call(ctx, "Fit a ducking envelope to the measured VO spans.",
-                stub={"duck_db": -9.0, "full_at_drop": True}, fallback_cost=0.002)
+    env = {"duck_db": -9.0, "full_at_drop": True}
     return {"envelope": env, "log": ["envelope: -9dB under speech, full across the drop"]}
 
 
@@ -402,8 +514,8 @@ def repair(state: Production, ctx: Ctx) -> dict:
         else:
             ctx.note(f"{rule} -> {owner}: no repair implemented yet")
 
-    _call(ctx, f"Retime shots {fixed} onto the nearest beat. Change nothing else.",
-          stub={"shots": fixed}, fallback_cost=0.004)
+    # Retiming and shortening already happened above, in code. A model call here
+    # would be billed for confirming arithmetic it did not perform.
 
     unowned = sorted({v["rule_id"] for v in state["violations"]}
                      - {"beat_alignment", "reading_speed"})

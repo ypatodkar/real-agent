@@ -14,7 +14,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from harness.model import DEFAULT_TEXT_MODEL, StubClient, get_client  # noqa: E402
+from harness.model import StubClient, default_model, get_client  # noqa: E402
 
 # What the pipeline needs, and the substring that identifies a candidate.
 NEEDS = [
@@ -64,7 +64,7 @@ def main() -> int:
 
     # Listed is not the same as callable: retired models still appear in the
     # listing and 404 on use, and a depleted account lists everything happily.
-    configured = DEFAULT_TEXT_MODEL
+    configured = default_model(client.backend)
     print(f"configured text model: {configured}")
     try:
         client.generate("Reply with the single word: ok", model=configured,

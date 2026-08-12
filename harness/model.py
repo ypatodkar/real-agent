@@ -32,14 +32,26 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import pathlib
 from dataclasses import dataclass, field
 from typing import Any
 
-# An alias rather than a pinned version: gemini-2.5-flash was listed by the API
-# but 404s for new keys ("no longer available to new users"), which is a failure
-# that only shows up at call time.
-DEFAULT_TEXT_MODEL = os.environ.get("SECOND_UNIT_TEXT_MODEL", "gemini-flash-latest")
+# Model names differ by backend: AI Studio retired gemini-2.5-* for new keys and
+# offers gemini-flash-latest; Vertex has no such alias and does serve 2.5. So the
+# default depends on where we end up, and SECOND_UNIT_TEXT_MODEL overrides both.
+FALLBACK_MODEL = {"vertex": "gemini-2.5-flash", "aistudio": "gemini-flash-latest"}
+
+
+def default_model(backend: str = "aistudio") -> str:
+    """Resolved at call time, never at import.
+
+    Read as a module constant this would evaluate before load_dotenv() runs, so
+    SECOND_UNIT_TEXT_MODEL set in .env would be silently ignored — which looks
+    exactly like the override not working.
+    """
+    return os.environ.get("SECOND_UNIT_TEXT_MODEL") or FALLBACK_MODEL.get(
+        backend, FALLBACK_MODEL["aistudio"])
 
 # Placeholders, same status as the caps in ARCHITECTURE.md §9. Confirm against
 # current published rates before trusting any cost number this produces.
@@ -72,8 +84,27 @@ class Response:
     stub: bool = False
 
     def json(self) -> Any:
-        """Parse the text as JSON. Stages ask for structured output."""
-        return json.loads(self.text)
+        """Parse the text as JSON, digging it out of prose if need be.
+
+        Non-grounded calls set response_mime_type and come back clean. Grounded
+        calls cannot — the API refuses both at once — so those arrive as prose
+        that may fence the JSON in a code block or wrap it in commentary.
+        """
+        text = (self.text or "").strip()
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+
+        fence = re.search(r"```(?:json)?\s*(.+?)```", text, re.S)
+        if fence:
+            return json.loads(fence.group(1).strip())
+
+        start = min((i for i in (text.find("{"), text.find("[")) if i != -1), default=-1)
+        if start == -1:
+            raise ValueError("no JSON found in response")
+        closer = "}" if text[start] == "{" else "]"
+        return json.loads(text[start:text.rfind(closer) + 1])
 
 
 def _price(model: str, usage: dict[str, int]) -> float:
@@ -92,8 +123,9 @@ class StubClient:
 
     backend = "stub"
 
-    def generate(self, prompt: str, *, stub: dict, model: str = DEFAULT_TEXT_MODEL,
-                 grounded: bool = False, **_) -> Response:
+    def generate(self, prompt: str, *, stub: dict, model: str | None = None,
+                 grounded: bool = False, json_out: bool = False, **_) -> Response:
+        model = model or default_model("stub")
         payload = json.dumps(stub)
         return Response(
             text=payload,
@@ -132,20 +164,24 @@ class GeminiClient:
         else:
             self._client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
 
-    def generate(self, prompt: str, *, model: str = DEFAULT_TEXT_MODEL,
+    def generate(self, prompt: str, *, model: str | None = None,
                  system: str | None = None, schema: Any = None,
-                 grounded: bool = False, temperature: float = 0.2,
-                 **_) -> Response:
+                 json_out: bool = False, grounded: bool = False,
+                 temperature: float = 0.2, **_) -> Response:
         from google.genai import types
+
+        model = model or default_model(self.backend)
 
         cfg: dict[str, Any] = {"temperature": temperature}
         if system:
             cfg["system_instruction"] = system
-        if schema is not None:
+        if json_out or schema is not None:
             cfg["response_mime_type"] = "application/json"
+        if schema is not None:
             cfg["response_schema"] = schema
         if grounded:
-            # Grounding and a response_schema are mutually exclusive on this API.
+            # Grounding cannot be combined with a JSON response type on this API,
+            # so a grounded call returns prose and the caller extracts from it.
             cfg.pop("response_schema", None)
             cfg.pop("response_mime_type", None)
             cfg["tools"] = [types.Tool(google_search=types.GoogleSearch())]

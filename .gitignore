@@ -1,6 +1,8 @@
-.claude/settings.local.json
 .DS_Store
 __pycache__/
+
+# Local config and secrets
+.claude/
 .env
 .mcp.json
 
@@ -8,3 +10,12 @@ __pycache__/
 assets/fixtures/
 out/
 runs/
+
+# Credentials must never sit in the working tree, not even untracked: one
+# `git add -A` publishes them. There are no tracked .json files in this repo,
+# so a blanket rule is the safe default rather than an inconvenience.
+*.json
+credentials*
+service-account*
+*.pem
+*.p12
