@@ -1,9 +1,13 @@
 .DS_Store
 __pycache__/
 
-# Local config and secrets
+# Local config and secrets.
+# Skills are project config and should survive a clone, so they are re-included.
+# Note: gitignore has no inline comments, and re-including a directory also
+# requires re-including its contents.
 .claude/*
-!.claude/skills/          # skills are project config — they should travel
+!.claude/skills/
+!.claude/skills/**
 .env
 .mcp.json
 
