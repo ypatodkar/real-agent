@@ -17,3 +17,7 @@ costs, the credential path that works, and how the model behaves when you are
 careless with a prompt.
 
 Nothing here yet. Direction being decided.
+
+The official rules are summarised in [RULES.md](RULES.md) — worth reading first,
+because two of them constrain the architecture directly: no non-Google agent
+frameworks, and the Grafana Cloud MCP server must be called **at runtime**.
