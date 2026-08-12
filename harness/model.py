@@ -162,16 +162,22 @@ class GeminiClient:
         )
 
 
+# Google separates "the API is off" from "this key may not call it". Getting
+# those the wrong way round costs an afternoon in the wrong console page.
 _HINTS = {
     "API_KEY_SERVICE_BLOCKED":
-        "the Generative Language API is not enabled on this key's project, or the "
-        "key has API restrictions that exclude it. Enable it at "
-        "console.cloud.google.com/apis/library/generativelanguage.googleapis.com, "
-        "or clear the restriction under APIs & Services > Credentials.",
+        "the API is enabled, but THIS KEY is restricted from calling it. "
+        "Console > APIs & Services > Credentials > the key > API restrictions: "
+        "add Generative Language API, or set 'Don't restrict key'. "
+        "Enabling the API again will not help.",
+    "SERVICE_DISABLED":
+        "the API itself is not enabled on this project. Enable it at "
+        "console.cloud.google.com/apis/library/generativelanguage.googleapis.com "
+        "for the project named in the error.",
     "API_KEY_INVALID":     "the key is malformed or has been revoked.",
-    "PERMISSION_DENIED":   "the key authenticated but is not allowed to call this API.",
     "RESOURCE_EXHAUSTED":  "quota exhausted for this key — free tier or rate limit.",
     "NOT_FOUND":           "the model name is not available on this backend.",
+    "PERMISSION_DENIED":   "the key authenticated but is not allowed to call this API.",
 }
 
 
