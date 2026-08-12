@@ -1,6 +1,6 @@
 """The model client — one interface, three backends.
 
-Gemini text, Imagen and TTS all go through `google-genai`. LangGraph orchestrates;
+Gemini text, Imagen and TTS all go through `google-genai`. The pipeline orchestrates;
 it never touches a model. That split matters for one specific reason:
 
     the recorder needs the provider payload VERBATIM, including
@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import os
+import pathlib
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -145,7 +146,31 @@ class GeminiClient:
         )
 
 
+def load_dotenv(path: pathlib.Path | None = None) -> list[str]:
+    """Read .env into the environment. Existing variables always win.
+
+    Hand-rolled rather than a dependency: it is fifteen lines, and the file is
+    gitignored so nothing here reaches the repository.
+    """
+    path = path or (pathlib.Path(__file__).resolve().parent.parent / ".env")
+    loaded: list[str] = []
+    if not path.exists():
+        return loaded
+
+    for raw in path.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key, value = key.strip(), value.strip().strip("'\"")
+        if key and key not in os.environ:
+            os.environ[key] = value
+            loaded.append(key)          # names only — never the values
+    return loaded
+
+
 def get_client(verbose: bool = True):
+    load_dotenv()
     backend = os.environ.get("SECOND_UNIT_BACKEND", "").lower()
 
     if backend == "vertex" and os.environ.get("GOOGLE_CLOUD_PROJECT"):
