@@ -22,7 +22,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from harness.model import StubClient, get_client  # noqa: E402
+from harness.model import ProviderError, StubClient, get_client  # noqa: E402
 
 QUESTION = "What year was the Voynich manuscript carbon-dated to, and by whom?"
 
@@ -39,7 +39,13 @@ def main() -> int:
     print(f"backend      {client.backend}")
     print(f"question     {QUESTION}\n")
 
-    resp = client.generate(QUESTION, grounded=True)
+    try:
+        resp = client.generate(QUESTION, grounded=True)
+    except ProviderError as exc:
+        print(f"BLOCKED  {exc}")
+        if exc.hint:
+            print(f"\n         {exc.hint}")
+        return 2
 
     print(f"text         {resp.text[:160]}...")
     print(f"tokens       in {resp.usage['prompt_tokens']}, out {resp.usage['output_tokens']}")

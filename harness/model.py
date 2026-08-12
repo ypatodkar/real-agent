@@ -40,6 +40,19 @@ RATES_PER_MTOK = {
 }
 
 
+class ProviderError(RuntimeError):
+    """A call reached the provider and was refused.
+
+    Typed so the harness can apply the stage's breach behaviour instead of the
+    run dying on an unhandled traceback. A 403 in week four should degrade the
+    stage and let QC report the damage, not lose the whole run.
+    """
+
+    def __init__(self, message: str, *, status: int | None = None, hint: str = ""):
+        self.status, self.hint = status, hint
+        super().__init__(message)
+
+
 @dataclass
 class Response:
     text: str
@@ -118,10 +131,13 @@ class GeminiClient:
             cfg.pop("response_mime_type", None)
             cfg["tools"] = [types.Tool(google_search=types.GoogleSearch())]
 
-        result = self._client.models.generate_content(
-            model=model, contents=prompt,
-            config=types.GenerateContentConfig(**cfg),
-        )
+        try:
+            result = self._client.models.generate_content(
+                model=model, contents=prompt,
+                config=types.GenerateContentConfig(**cfg),
+            )
+        except Exception as exc:
+            raise ProviderError(str(exc)[:400], hint=_diagnose(exc)) from exc
 
         raw = result.model_dump(mode="json", exclude_none=True)
 
@@ -144,6 +160,27 @@ class GeminiClient:
             cost=_price(model, usage),
             grounding=grounding,
         )
+
+
+_HINTS = {
+    "API_KEY_SERVICE_BLOCKED":
+        "the Generative Language API is not enabled on this key's project, or the "
+        "key has API restrictions that exclude it. Enable it at "
+        "console.cloud.google.com/apis/library/generativelanguage.googleapis.com, "
+        "or clear the restriction under APIs & Services > Credentials.",
+    "API_KEY_INVALID":     "the key is malformed or has been revoked.",
+    "PERMISSION_DENIED":   "the key authenticated but is not allowed to call this API.",
+    "RESOURCE_EXHAUSTED":  "quota exhausted for this key — free tier or rate limit.",
+    "NOT_FOUND":           "the model name is not available on this backend.",
+}
+
+
+def _diagnose(exc: Exception) -> str:
+    text = str(exc)
+    for token, hint in _HINTS.items():
+        if token in text:
+            return hint
+    return ""
 
 
 def load_dotenv(path: pathlib.Path | None = None) -> list[str]:

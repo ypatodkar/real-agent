@@ -26,6 +26,7 @@ from harness.budget import (
     Ledger,
     RunTotalExceeded,
 )
+from harness.model import ProviderError
 from harness.recorder import Recorder
 from harness.state import Production
 
@@ -125,7 +126,21 @@ def stage(
             return {"degraded": [name], "log": [f"{name}: degraded — {exc}"]}
 
         before = copy.deepcopy(dict(state))
-        update = fn(state, ctx) or {}
+
+        try:
+            update = fn(state, ctx) or {}
+        except ProviderError as exc:
+            # The provider refused. Same policy as a budget breach: cheap-and-early
+            # stages abort because restarting is free, expensive-and-late ones
+            # degrade so the run is not thrown away after most of its cost.
+            recorder.breach(name, cap.on_breach, f"provider: {exc}")
+            detail = f"{name}: provider refused — {exc.hint or exc}"
+
+            if cap.on_breach == ABORT:
+                raise Aborted(detail) from exc
+            if cap.on_breach == ESCALATE:
+                return {"outcome": "escalated", "log": [detail]}
+            return {"degraded": [name], "log": [detail]}
 
         if writes is not None:
             stray = assert_scope(before, update, writes | {"log", "spend", "degraded"})
