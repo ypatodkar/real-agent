@@ -200,15 +200,28 @@ def load_dotenv(path: pathlib.Path | None = None) -> list[str]:
     if not path.exists():
         return loaded
 
+    seen: set[str] = set()
     for raw in path.read_text().splitlines():
         line = raw.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, _, value = line.partition("=")
         key, value = key.strip(), value.strip().strip("'\"")
-        if key and key not in os.environ:
+        if not key:
+            continue
+
+        # A duplicate is almost always an append that was meant to be a replace.
+        # Silently keeping the first one sends you debugging a key you are not
+        # using, so the LAST wins and it says so.
+        if key in seen:
+            print(f"  [.env] {key} appears more than once — using the last. "
+                  f"Delete the earlier line to silence this.")
+        seen.add(key)
+
+        if key not in os.environ or key in loaded:
             os.environ[key] = value
-            loaded.append(key)          # names only — never the values
+            if key not in loaded:
+                loaded.append(key)      # names only — never the values
     return loaded
 
 
