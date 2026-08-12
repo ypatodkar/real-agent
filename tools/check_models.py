@@ -62,12 +62,22 @@ def main() -> int:
             print("       · nothing matching — may need a different backend or region")
         print()
 
+    # Listed is not the same as callable: retired models still appear in the
+    # listing and 404 on use, and a depleted account lists everything happily.
     configured = DEFAULT_TEXT_MODEL
-    status = "available" if configured in names else "NOT in the list above"
-    print(f"configured text model: {configured} — {status}")
-    if configured not in names:
-        print("  set SECOND_UNIT_TEXT_MODEL in .env to one that is.")
-    return 0
+    print(f"configured text model: {configured}")
+    try:
+        client.generate("Reply with the single word: ok", model=configured,
+                        stub={"ok": True})
+        print("  CALLABLE — end to end works")
+        return 0
+    except Exception as exc:
+        from harness.model import ProviderError, _diagnose
+        hint = exc.hint if isinstance(exc, ProviderError) else _diagnose(exc)
+        print(f"  NOT CALLABLE — {str(exc)[:160]}")
+        if hint:
+            print(f"\n  {hint}")
+        return 2
 
 
 if __name__ == "__main__":

@@ -30,7 +30,10 @@ import pathlib
 from dataclasses import dataclass, field
 from typing import Any
 
-DEFAULT_TEXT_MODEL = os.environ.get("SECOND_UNIT_TEXT_MODEL", "gemini-2.5-flash")
+# An alias rather than a pinned version: gemini-2.5-flash was listed by the API
+# but 404s for new keys ("no longer available to new users"), which is a failure
+# that only shows up at call time.
+DEFAULT_TEXT_MODEL = os.environ.get("SECOND_UNIT_TEXT_MODEL", "gemini-flash-latest")
 
 # Placeholders, same status as the caps in ARCHITECTURE.md §9. Confirm against
 # current published rates before trusting any cost number this produces.
@@ -175,7 +178,14 @@ _HINTS = {
         "console.cloud.google.com/apis/library/generativelanguage.googleapis.com "
         "for the project named in the error.",
     "API_KEY_INVALID":     "the key is malformed or has been revoked.",
-    "RESOURCE_EXHAUSTED":  "quota exhausted for this key — free tier or rate limit.",
+    "prepayment credits are depleted":
+        "AI Studio prepayment is at zero. This pool is SEPARATE from Google Cloud "
+        "credits — GCP credit only applies via Vertex. Either top up at "
+        "ai.studio/projects, or switch to Vertex by setting GOOGLE_CLOUD_PROJECT.",
+    "RESOURCE_EXHAUSTED":  "quota exhausted — rate limit, free-tier cap, or depleted credit.",
+    "no longer available to new users":
+        "this model is retired for new keys. Run tools/check_models.py and set "
+        "SECOND_UNIT_TEXT_MODEL in .env to one that is callable.",
     "NOT_FOUND":           "the model name is not available on this backend.",
     "PERMISSION_DENIED":   "the key authenticated but is not allowed to call this API.",
 }
