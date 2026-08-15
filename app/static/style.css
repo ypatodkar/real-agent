@@ -1,0 +1,234 @@
+/* Second Unit — plain CSS.
+   A writing tool, not a dashboard. One question at a time, room to think,
+   nothing else asking for attention. */
+
+:root {
+  --paper:   #F4F4F1;
+  --card:    #FFFFFF;
+  --ink:     #16161A;
+  --mute:    #6E6E76;
+  --faint:   #9A9AA1;
+  --rule:    #E2E1DC;
+  --accent:  #2F4858;
+  --accent-soft: #E4EAEC;
+  --warn:    #8A5A24;
+
+  --serif: Charter, "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --mono: "SF Mono", ui-monospace, Menlo, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper:  #14140F;
+    --card:   #1C1C18;
+    --ink:    #EDEDE6;
+    --mute:   #9C9C94;
+    --faint:  #6A6A63;
+    --rule:   #2C2C26;
+    --accent: #8FB3C4;
+    --accent-soft: #1E2A31;
+    --warn:   #C99A5B;
+  }
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--serif);
+  font-size: 18px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+  padding: 0 24px 120px;
+}
+
+.stage-view {
+  max-width: 660px;
+  margin: 0 auto;
+  padding-top: clamp(48px, 12vh, 130px);
+}
+
+/* --------------------------------------------------------------- start */
+
+.eyebrow {
+  font-family: var(--sans);
+  font-size: 11px;
+  letter-spacing: .18em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-bottom: 26px;
+}
+
+h1 {
+  font-size: clamp(34px, 6vw, 52px);
+  line-height: 1.08;
+  font-weight: 400;
+  letter-spacing: -0.015em;
+  text-wrap: balance;
+  margin-bottom: 22px;
+}
+
+.standfirst {
+  color: var(--mute);
+  max-width: 47ch;
+  margin-bottom: 46px;
+}
+
+/* --------------------------------------------------------------- forms */
+
+.field { display: block; margin-bottom: 22px; }
+
+.label, .hint {
+  display: block;
+  font-family: var(--sans);
+  font-size: 12px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.label { margin-bottom: 10px; }
+.hint  { margin-top: 9px; text-transform: none; letter-spacing: 0; font-size: 13.5px; }
+
+textarea {
+  width: 100%;
+  font-family: var(--serif);
+  font-size: 18px;
+  line-height: 1.6;
+  color: var(--ink);
+  background: var(--card);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 16px 18px;
+  resize: vertical;
+}
+textarea::placeholder { color: var(--faint); font-style: italic; }
+textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
+
+button {
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: .06em;
+  cursor: pointer;
+  border-radius: 3px;
+  padding: 12px 26px;
+  border: 1px solid transparent;
+  transition: opacity .15s;
+}
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button:disabled { opacity: .4; cursor: not-allowed; }
+
+.primary { background: var(--accent); color: var(--paper); }
+.primary:hover:not(:disabled) { opacity: .87; }
+
+.ghost { background: none; color: var(--mute); border-color: var(--rule); }
+.ghost:hover { color: var(--ink); }
+
+/* --------------------------------------------------------------- rail */
+
+.rail {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 52px;
+}
+.rail span {
+  flex: 1;
+  font-family: var(--sans);
+  font-size: 10.5px;
+  letter-spacing: .13em;
+  text-transform: uppercase;
+  color: var(--faint);
+  padding-top: 9px;
+  border-top: 2px solid var(--rule);
+}
+.rail span[data-state="done"]    { color: var(--mute); border-top-color: var(--accent); }
+.rail span[data-state="current"] { color: var(--accent); border-top-color: var(--accent); font-weight: 600; }
+
+/* --------------------------------------------------------------- ask */
+
+.stage-goal {
+  font-family: var(--sans);
+  font-size: 13px;
+  color: var(--faint);
+  margin-bottom: 14px;
+}
+
+.question {
+  font-size: clamp(26px, 4.4vw, 36px);
+  line-height: 1.28;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+  margin-bottom: 34px;
+  min-height: 2.4em;
+}
+.question.thinking { color: var(--faint); font-style: italic; }
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+
+.counter {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --------------------------------------------------------------- recap */
+
+.established {
+  margin-top: 76px;
+  padding-top: 30px;
+  border-top: 1px solid var(--rule);
+}
+.established h3 {
+  font-family: var(--sans);
+  font-size: 11px;
+  letter-spacing: .15em;
+  text-transform: uppercase;
+  color: var(--faint);
+  font-weight: 500;
+  margin-bottom: 22px;
+}
+.established dt {
+  font-family: var(--sans);
+  font-size: 13.5px;
+  color: var(--mute);
+  margin-bottom: 5px;
+}
+.established dd {
+  margin: 0 0 24px;
+  padding-left: 16px;
+  border-left: 2px solid var(--accent-soft);
+}
+
+/* --------------------------------------------------------------- status */
+
+.status {
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  padding: 9px 24px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--faint);
+  background: var(--paper);
+  border-top: 1px solid var(--rule);
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+.status .on   { color: var(--accent); }
+.status .off  { color: var(--warn); }
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}

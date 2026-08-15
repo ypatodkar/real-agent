@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Second Unit</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ------------------------------------------------------------ start -->
+<main id="start" class="stage-view">
+  <header class="masthead">
+    <p class="eyebrow">Second Unit</p>
+    <h1>Nobody can write<br>your film but you.</h1>
+    <p class="standfirst">
+      This won't suggest a plot, offer three loglines, or tell you your
+      character should be a widower. It asks the questions a script editor
+      asks — the ones that make you realise what you actually meant.
+    </p>
+  </header>
+
+  <form id="startForm">
+    <label class="field">
+      <span class="label">Where are you starting?</span>
+      <textarea id="seed" rows="3"
+        placeholder="a short film about a locksmith — or a single image, a feeling, nothing at all"></textarea>
+      <span class="hint">Anything is enough. Blank is enough.</span>
+    </label>
+    <button type="submit" class="primary">Begin</button>
+  </form>
+</main>
+
+<!-- ------------------------------------------------------------ interview -->
+<main id="interview" class="stage-view" hidden>
+
+  <nav class="rail" id="rail" aria-label="Progress"></nav>
+
+  <section class="ask">
+    <p class="stage-goal" id="goal"></p>
+    <h2 class="question" id="question">…</h2>
+
+    <form id="answerForm">
+      <textarea id="answer" rows="6"
+        placeholder="Think out loud. Half-formed is fine — that's the point."
+        aria-label="Your answer"></textarea>
+      <div class="actions">
+        <button type="submit" class="primary" id="next">Answer</button>
+        <button type="button" class="ghost" id="skip">Skip this one</button>
+        <span class="counter" id="counter"></span>
+      </div>
+    </form>
+  </section>
+
+  <aside class="established" id="established" hidden>
+    <h3>What you've established</h3>
+    <dl id="establishedList"></dl>
+  </aside>
+
+</main>
+
+<footer class="status" id="status"></footer>
+
+<script src="app.js"></script>
+</body>
+</html>

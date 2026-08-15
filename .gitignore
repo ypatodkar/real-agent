@@ -24,3 +24,4 @@ credentials*
 service-account*
 *.pem
 *.p12
+store/
