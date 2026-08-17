@@ -90,6 +90,9 @@ function render(state) {
     .map((e) => `<dt>${escape(e.q)}</dt><dd>${escape(e.a)}</dd>`)
     .join("");
 
+  $("finish").hidden = !state.can_write_up;
+  $("finishNote").textContent = state.can_write_up ? "" : (state.write_up_note || "");
+
   const bits = [`${state.answered} answered`, `${state.words} words`];
   if (state.ranked) bits.push("question chosen from Grafana");
   if (state.stage_changed) bits.push(`→ ${state.stage}`);
@@ -134,3 +137,65 @@ fetch("/api/health").then((r) => r.json()).then((h) => {
     ? $("status").innerHTML
     : $("status").innerHTML;
 }).catch(() => {});
+
+// ------------------------------------------------------------------ outline
+
+$("writeUp").addEventListener("click", async () => {
+  const b = $("writeUp");
+  b.disabled = true;
+  b.textContent = "Assembling…";
+  const res = await post(`/api/project/${projectId}/write-up`, {});
+  b.disabled = false;
+  b.textContent = "Write it up";
+  if (!res || res.error) {
+    status([res?.error || "could not assemble"]);
+    return;
+  }
+  showOutline(res.outline);
+});
+
+$("backToInterview").addEventListener("click", () => {
+  $("outlineView").hidden = true;
+  $("interview").hidden = false;
+  $("answer").focus();
+});
+
+function showOutline(o) {
+  $("interview").hidden = true;
+  $("outlineView").hidden = false;
+
+  $("outTitle").textContent = o.title || "Untitled";
+  $("outLogline").textContent = o.logline || "";
+
+  $("scenes").innerHTML = (o.scenes || []).map((s) => `
+    <article class="scene">
+      <div class="scene-n">${s.n}</div>
+      <div>
+        <div class="slug">${escape(s.slug || "")}</div>
+        ${s.who?.length ? `<div class="who">${escape(s.who.join(" · "))}</div>` : ""}
+        <p class="scene-action">${escape(s.action || "")}</p>
+        <p class="scene-why">${escape(s.why || "")}</p>
+        ${s.missing ? `<p class="scene-missing">Undecided: ${escape(s.missing)}</p>` : ""}
+      </div>
+    </article>`).join("");
+
+  const gaps = o.gaps || [];
+  $("gapsBox").hidden = gaps.length === 0;
+  $("gapsList").innerHTML = gaps.map((g) => `<li>${escape(g)}</li>`).join("");
+
+  // The audit is the promise being kept in public: if a name appears that the
+  // writer never typed, say so rather than hoping nobody checks.
+  const flagged = o.unsupported || [];
+  const existing = document.querySelector(".flagged");
+  if (existing) existing.remove();
+  if (flagged.length) {
+    const el = document.createElement("p");
+    el.className = "flagged";
+    el.textContent = `These appear in the outline but you never mentioned them: ${flagged.join(", ")}`;
+    $("outlineView").appendChild(el);
+  }
+
+  window.scrollTo(0, 0);
+  status([`${(o.scenes || []).length} scenes`, `${gaps.length} still undecided`,
+          flagged.length ? `${flagged.length} unsupported` : "nothing invented"]);
+}

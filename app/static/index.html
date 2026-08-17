@@ -52,11 +52,36 @@
     </form>
   </section>
 
+  <div class="finish" id="finish" hidden>
+    <button type="button" class="primary" id="writeUp">Write it up</button>
+    <span class="hint" id="finishNote"></span>
+  </div>
+
   <aside class="established" id="established" hidden>
     <h3>What you've established</h3>
     <dl id="establishedList"></dl>
   </aside>
 
+</main>
+
+<!-- ------------------------------------------------------------ outline -->
+<main id="outlineView" class="stage-view" hidden>
+  <header class="masthead">
+    <p class="eyebrow">Your outline — assembled from your answers, nothing added</p>
+    <h1 id="outTitle"></h1>
+    <p class="standfirst" id="outLogline"></p>
+  </header>
+
+  <section id="scenes"></section>
+
+  <aside class="gaps" id="gapsBox" hidden>
+    <h3>Still undecided</h3>
+    <ul id="gapsList"></ul>
+  </aside>
+
+  <div class="actions" style="margin-top:40px">
+    <button type="button" class="ghost" id="backToInterview">Keep developing</button>
+  </div>
 </main>
 
 <footer class="status" id="status"></footer>

@@ -24,7 +24,7 @@ from urllib.parse import urlparse
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from core import interview, telemetry  # noqa: E402
+from core import interview, scriptwright, telemetry  # noqa: E402
 from core.model import get_client, load_dotenv  # noqa: E402
 
 load_dotenv()
@@ -109,10 +109,29 @@ def next_question(session: interview.Session) -> dict:
             "ranked": False, "note": f"model kept proposing answers: {last_error}"}
 
 
+def write_up(session: interview.Session) -> dict:
+    """Assemble the interview into a scene outline."""
+    response = MODEL.generate(
+        scriptwright.build_prompt(session),
+        system=scriptwright.SYSTEM,
+        json_out=True,
+        schema=scriptwright.SCENES_SCHEMA,
+        temperature=0.4,                 # assembling, not inventing
+        stub={"title": "Untitled", "logline": "", "scenes": [], "gaps": []},
+    )
+    outline = scriptwright.parse(response.json(), session)
+    path_for(session.project_id + "-outline").write_text(
+        json.dumps(outline.to_dict(), indent=2))
+    return outline.to_dict()
+
+
 def state_of(session: interview.Session, extra: dict | None = None) -> dict:
     answered = [t for t in session.turns if t.answer and not t.skipped]
     current = session.turns[-1] if session.turns else None
+    ready, note = scriptwright.readiness(session)
     return {
+        "can_write_up": ready,
+        "write_up_note": note,
         "project_id": session.project_id,
         "seed": session.seed,
         "stage": session.stage,
@@ -196,6 +215,12 @@ class Handler(SimpleHTTPRequestHandler):
                 asked = next_question(session)
                 save(session)
                 return self._send(state_of(session, {**asked, "stage_changed": moved}))
+
+            if path.endswith("/write-up"):
+                ready, note = scriptwright.readiness(session)
+                if not ready:
+                    return self._send({"error": note}, 400)
+                return self._send({**state_of(session), "outline": write_up(session)})
 
             if path.endswith("/skip"):
                 if session.turns and not session.turns[-1].answer:
