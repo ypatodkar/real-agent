@@ -52,18 +52,38 @@ For each scene give:
   missing   what the writer has not decided yet. Empty string if nothing.
   from      short quote or paraphrase of the answer this came from
 
-Return JSON: {"title": str, "logline": str, "scenes": [...], "gaps": [str]}
+Return JSON: {"title": str, "logline": str, "scenes": [...], "gaps": [str],
+"ai_added": [str]}
 title and logline must also be assembled, not invented. gaps lists the big
 unanswered questions across the whole film.
 """
 
+AI_LED = """
+MODE-SPECIFIC EXCEPTION TO THE NO-INVENTION RULE ABOVE: the writer selected
+AI-led development. You may develop coherent missing story
+material after honoring every fact and preference they supplied. Do not
+overwrite their decisions. List every substantial detail you introduced in
+`ai_added` so authorship remains transparent. Produce a complete, usable
+outline rather than leaving gaps you can responsibly bridge.
+"""
+
+COLLABORATIVE = """
+MODE-SPECIFIC EXCEPTION TO THE NO-INVENTION RULE ABOVE: the writer selected
+collaborative development. Preserve all of their decisions.
+You may add only minor connective material needed to make the supplied moments
+cohere; do not invent a new central character, goal, conflict, turn, or ending.
+List every addition in `ai_added`. Leave consequential undecided choices in
+`gaps` for the writer.
+"""
+
 SCENES_SCHEMA = {
     "type": "object",
-    "required": ["title", "logline", "scenes", "gaps"],
+    "required": ["title", "logline", "scenes", "gaps", "ai_added"],
     "properties": {
         "title": {"type": "string"},
         "logline": {"type": "string"},
         "gaps": {"type": "array", "items": {"type": "string"}},
+        "ai_added": {"type": "array", "items": {"type": "string"}},
         "scenes": {
             "type": "array",
             "items": {
@@ -90,21 +110,33 @@ class Outline:
     logline: str
     scenes: list[dict[str, Any]] = field(default_factory=list)
     gaps: list[str] = field(default_factory=list)
+    ai_added: list[str] = field(default_factory=list)
     unsupported: list[str] = field(default_factory=list)   # audit findings
 
     def to_dict(self) -> dict:
         return {"title": self.title, "logline": self.logline, "scenes": self.scenes,
-                "gaps": self.gaps, "unsupported": self.unsupported}
+                "gaps": self.gaps, "ai_added": self.ai_added,
+                "unsupported": self.unsupported}
+
+
+def system_for(session) -> str:
+    if session.collaboration_mode == "ai_led":
+        return SYSTEM + AI_LED
+    if session.collaboration_mode == "collaborative":
+        return SYSTEM + COLLABORATIVE
+    return SYSTEM
 
 
 def readiness(session) -> tuple[bool, str]:
     """Is there enough here to assemble anything honest?"""
     answered = [t for t in session.turns if t.answer and not t.skipped]
-    if len(answered) < MIN_ANSWERS:
-        return False, (f"{len(answered)} of {MIN_ANSWERS} questions answered — "
+    minimums = {"ai_led": (2, 20), "collaborative": (3, 40), "author_led": (4, 60)}
+    min_answers, min_words = minimums[session.collaboration_mode]
+    if len(answered) < min_answers:
+        return False, (f"{len(answered)} of {min_answers} questions answered — "
                        f"a few more and there will be enough to work with")
     words = sum(t.words for t in answered)
-    if words < 60:
+    if words < min_words:
         return False, "the answers are very short — try one more with some detail"
     return True, f"{len(answered)} answers, {words} words"
 
@@ -113,8 +145,12 @@ def build_prompt(session) -> str:
     answered = [t for t in session.turns if t.answer and not t.skipped]
     body = "\n\n".join(f"Q: {t.question}\nA: {t.answer}" for t in answered)
     seed = f"They started with: {session.seed}\n\n" if session.seed else ""
-    return (f"{seed}The interview:\n\n{body}\n\n"
-            f"Assemble the outline. Use only what is above.")
+    mode_instruction = {
+        "ai_led": "Develop missing material as permitted, and disclose every addition.",
+        "collaborative": "Bridge only minor connective gaps, and disclose every addition.",
+        "author_led": "Assemble the outline using only what is above.",
+    }[session.collaboration_mode]
+    return f"{seed}The interview:\n\n{body}\n\n{mode_instruction}"
 
 
 # ----------------------------------------------------------------- the audit
@@ -179,6 +215,8 @@ def parse(payload: dict, session) -> Outline:
         logline=(payload.get("logline") or "").strip(),
         scenes=scenes,
         gaps=[g for g in (payload.get("gaps") or []) if g],
+        ai_added=[x for x in (payload.get("ai_added") or []) if x],
     )
-    outline.unsupported = audit(outline, session)
+    if session.collaboration_mode == "author_led":
+        outline.unsupported = audit(outline, session)
     return outline
