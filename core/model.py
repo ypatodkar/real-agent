@@ -34,6 +34,8 @@ import json
 import os
 import re
 import pathlib
+import random
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -186,13 +188,31 @@ class GeminiClient:
             cfg.pop("response_mime_type", None)
             cfg["tools"] = [types.Tool(google_search=types.GoogleSearch())]
 
-        try:
-            result = self._client.models.generate_content(
-                model=model, contents=prompt,
-                config=types.GenerateContentConfig(**cfg),
-            )
-        except Exception as exc:
-            raise ProviderError(str(exc)[:400], hint=_diagnose(exc)) from exc
+        # Vertex can return short-lived 429s even when the project still has
+        # quota. Retry those here so every caller gets the same behaviour.
+        # Keep the wait small: this client is used by an interactive UI.
+        result = None
+        for attempt in range(3):
+            try:
+                result = self._client.models.generate_content(
+                    model=model, contents=prompt,
+                    config=types.GenerateContentConfig(**cfg),
+                )
+                break
+            except Exception as exc:
+                message = str(exc)
+                transient = "429" in message or "RESOURCE_EXHAUSTED" in message
+                if transient and attempt < 2:
+                    time.sleep((1.25 * (2 ** attempt)) + random.uniform(0, 0.35))
+                    continue
+                raise ProviderError(
+                    message[:400],
+                    status=429 if transient else None,
+                    hint=_diagnose(exc),
+                ) from exc
+
+        if result is None:  # defensive; the loop either returns or raises
+            raise ProviderError("model returned no result")
 
         raw = result.model_dump(mode="json", exclude_none=True)
 
