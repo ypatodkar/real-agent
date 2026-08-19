@@ -1,0 +1,4 @@
+google-genai>=1.19,<2
+google-cloud-speech>=2.33,<3
+mcp>=2,<3
+websockets>=15,<18
