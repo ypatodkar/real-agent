@@ -8,44 +8,136 @@
 </head>
 <body>
 
+<header class="app-header">
+  <button type="button" class="wordmark" id="home" aria-label="Start a new Second Unit project">
+    Second Unit
+  </button>
+  <div class="header-actions">
+    <p class="save-state" id="saveState" aria-live="polite"></p>
+    <button type="button" class="history-button" id="openHistory" aria-label="Open story history" title="Story history">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5M12 7v5l3 2"/>
+      </svg>
+    </button>
+  </div>
+</header>
+
+<div class="notice" id="notice" role="status" aria-live="polite" hidden></div>
+
+<div class="history-shell" id="historyShell" hidden>
+  <button type="button" class="history-backdrop" id="historyBackdrop" aria-label="Close story history"></button>
+  <aside class="history-panel" role="dialog" aria-modal="true" aria-labelledby="historyTitle">
+    <header class="history-header">
+      <div>
+        <p class="eyebrow">Your work</p>
+        <h2 id="historyTitle">Story history</h2>
+      </div>
+      <button type="button" class="icon-button" id="closeHistory" aria-label="Close story history">×</button>
+    </header>
+    <div id="historyList"></div>
+    <article id="historyDetail" hidden></article>
+  </aside>
+</div>
+
 <!-- ------------------------------------------------------------ start -->
 <main id="start" class="stage-view">
   <header class="masthead">
-    <p class="eyebrow">Second Unit</p>
-    <h1>Nobody can write<br>your film but you.</h1>
+    <p class="eyebrow">Story development for short films</p>
+    <h1>Where do you want<br>to begin?</h1>
     <p class="standfirst">
-      This won't suggest a plot, offer three loglines, or tell you your
-      character should be a widower. It asks the questions a script editor
-      asks — the ones that make you realise what you actually meant.
+      Start with the beginning of an idea, or bring a screenplay that is ready
+      to be planned for production.
     </p>
   </header>
 
-  <form id="startForm">
+  <section class="path-grid" id="pathGrid" aria-label="Choose how to begin">
+    <button type="button" class="path-card path-card-active" id="chooseBrainstorm">
+      <span class="path-number">01</span>
+      <strong>Brainstorm a story</strong>
+      <span>Start with a fragment. Answer one useful question at a time and shape it into scenes.</span>
+      <span class="path-action">Start brainstorming →</span>
+    </button>
+    <button type="button" class="path-card" disabled aria-describedby="scriptStatus">
+      <span class="path-number">02</span>
+      <strong>Break down a script</strong>
+      <span>Bring a finished screenplay and turn it into elements, schedule, and budget.</span>
+      <span class="path-action" id="scriptStatus">Coming next</span>
+    </button>
+  </section>
+
+  <form id="startForm" class="seed-form" hidden>
+    <div class="seed-heading">
+      <div>
+        <p class="eyebrow">Brainstorm</p>
+        <h2>Give me whatever you have.</h2>
+      </div>
+      <button type="button" class="text-button" id="changePath">Change path</button>
+    </div>
+    <section class="involvement-field">
+      <div class="involvement-heading">
+        <label for="involvement">How involved do you want to be?</label>
+        <output id="involvementValue" for="involvement">75%</output>
+      </div>
+      <input type="range" id="involvement" min="0" max="100" step="1" value="75">
+      <div class="range-labels" aria-hidden="true">
+        <span>AI takes the lead</span>
+        <span>I shape every choice</span>
+      </div>
+      <p class="involvement-note" id="involvementNote">
+        You make the story decisions. The editor asks contextual questions and does not invent.
+      </p>
+    </section>
     <label class="field">
-      <span class="label">Where are you starting?</span>
-      <textarea id="seed" rows="3"
-        placeholder="a short film about a locksmith — or a single image, a feeling, nothing at all"></textarea>
+      <span class="label">Your starting point</span>
+      <div class="answer-field">
+        <textarea id="seed" rows="4"
+          placeholder="A short film about a locksmith — or a single image, a feeling, nothing at all"></textarea>
+        <button type="button" class="mic-button" id="micSeed" aria-label="Start voice typing"
+          title="Start voice typing" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm-6-3a6 6 0 0 0 12 0M12 18v3M9 21h6"/>
+          </svg>
+        </button>
+      </div>
+      <p class="speech-state" id="speechStateSeed" aria-live="polite"></p>
       <span class="hint">Anything is enough. Blank is enough.</span>
     </label>
-    <button type="submit" class="primary">Begin</button>
+    <button type="submit" class="primary">Begin interview</button>
   </form>
 </main>
 
 <!-- ------------------------------------------------------------ interview -->
 <main id="interview" class="stage-view" hidden>
 
-  <nav class="rail" id="rail" aria-label="Progress"></nav>
+  <section class="readiness" aria-label="Outline readiness">
+    <div class="readiness-label">
+      <span>Outline readiness</span>
+      <strong id="readinessValue">0%</strong>
+    </div>
+    <div class="readiness-track" aria-hidden="true">
+      <span id="readinessBar"></span>
+    </div>
+  </section>
 
-  <section class="ask">
+  <section class="ask" id="askPanel">
     <p class="stage-goal" id="goal"></p>
     <h2 class="question" id="question">…</h2>
 
     <form id="answerForm">
-      <textarea id="answer" rows="6"
-        placeholder="Think out loud. Half-formed is fine — that's the point."
-        aria-label="Your answer"></textarea>
+      <div class="answer-field">
+        <textarea id="answer" rows="6"
+          placeholder="Think out loud. Half-formed is fine — that's the point."
+          aria-label="Your answer"></textarea>
+        <button type="button" class="mic-button" id="mic" aria-label="Start voice typing"
+          title="Start voice typing" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm-6-3a6 6 0 0 0 12 0M12 18v3M9 21h6"/>
+          </svg>
+        </button>
+      </div>
+      <p class="speech-state" id="speechState" aria-live="polite"></p>
       <div class="actions">
-        <button type="submit" class="primary" id="next">Answer</button>
+        <button type="submit" class="primary" id="next">Answer &amp; continue</button>
         <button type="button" class="ghost" id="skip">Skip this one</button>
         <span class="counter" id="counter"></span>
       </div>
@@ -54,13 +146,24 @@
 
   <div class="finish" id="finish" hidden>
     <button type="button" class="primary" id="writeUp">Write it up</button>
+    <button type="button" class="ghost" id="keepExploring" hidden>Ask another question</button>
     <span class="hint" id="finishNote"></span>
   </div>
 
+  <aside class="gaps interview-gaps" id="interviewGaps" hidden>
+    <h3>What still needs clarity</h3>
+    <ul id="interviewGapsList"></ul>
+  </aside>
+
   <aside class="established" id="established" hidden>
     <h3>What you've established</h3>
-    <dl id="establishedList"></dl>
+    <ul id="establishedList"></ul>
   </aside>
+
+  <div class="abort-zone">
+    <button type="button" class="text-button danger" id="abortProject">Save as draft &amp; start over</button>
+    <span>Your answers and the latest story assessment will be archived.</span>
+  </div>
 
 </main>
 
@@ -79,8 +182,15 @@
     <ul id="gapsList"></ul>
   </aside>
 
+  <aside class="ai-added" id="aiAddedBox" hidden>
+    <h3>Developed by AI</h3>
+    <p>These details were added under your selected collaboration level.</p>
+    <ul id="aiAddedList"></ul>
+  </aside>
+
   <div class="actions" style="margin-top:40px">
     <button type="button" class="ghost" id="backToInterview">Keep developing</button>
+    <button type="button" class="primary" id="newProject">Start another film</button>
   </div>
 </main>
 
