@@ -9,20 +9,17 @@ For people making a 5–20 minute short, often doing four jobs themselves.
 
 ## The idea
 
-Every AI writing tool generates. You type a premise, it writes your story.
-The result is the model's film, not yours.
+Most AI writing tools hand you a finished story before you have thought about
+what you want.
 
-**This one interrogates.** It asks the questions a good script editor asks —
-the ones that make you realise what you actually meant — and never proposes the
-answer. You do the thinking. It makes sure you think about the right things.
+**This one develops it with you.** It asks the questions a good script editor
+asks, offers concrete possibilities whenever they would help, and writes the
+material the film still needs.
 
 > **Example.** You say: *"a short about a locksmith."*
 >
-> A generator writes you three logline options.
->
-> This asks: *"What can he open that he wishes he couldn't?"*
->
-> The second one is how a film gets made.
+> It asks: *"What can he open that he wishes he couldn't?"* — and if you do not
+> know yet, it gives you three answers worth reacting to.
 
 Then, when there is a script, it does the unglamorous half: tag every element,
 group scenes into shooting days, cost it out. Days of work, done in minutes.
@@ -34,7 +31,7 @@ group scenes into shooting days, cost it out. Days of work, done in minutes.
 | | **Develop** | **Break down** |
 |---|---|---|
 | Input | A fragment — a premise, an image, nothing | A finished script |
-| What it does | Asks one sharp question at a time | Tags cast, props, locations, wardrobe, VFX, stunts |
+| What it does | Questions, reflects, and offers help when useful | Tags cast, props, locations, wardrobe, VFX, stunts |
 | Output | Scenes, then a script | Schedule, budget, call sheets |
 | Feels like | A script editor | An assistant director |
 
@@ -67,13 +64,13 @@ with the system.
 
 | Range | Behavior |
 |---|---|
-| 0–33 · AI-led | Dynamically stop when enough direction exists, usually after 2–4 questions. A five-answer safety ceiling prevents a supposedly quick interview from dragging on. Then develop a complete outline, preserve every supplied decision, and disclose every AI-added detail. |
-| 34–66 · Collaborative | Dynamically stop once the important decisions are established, usually after 4–7 questions, with a nine-answer safety ceiling. The AI may bridge minor connective gaps but cannot invent a new central character, goal, conflict, turn, or ending. Disclose every addition. |
-| 67–100 · Author-led | Use the fully dynamic interview. The AI asks contextual questions but never supplies story decisions; the outline is assembled only from the writer's material. |
+| 0–33 · AI-led | Dynamically stop when enough direction exists, usually after 2–4 questions. A five-answer safety ceiling prevents a supposedly quick interview from dragging on. Then develop a complete outline, preserving every decision the writer supplied. |
+| 34–66 · Collaborative | Dynamically stop once the important decisions are established, usually after 4–7 questions, with a nine-answer safety ceiling. |
+| 67–100 · Author-led | Use the fully dynamic interview. The writer is asked about more of the film before it is written, but the agent still helps whenever help is useful. |
 
-The interviewer itself never embeds suggestions in its questions in any mode.
-Permission to add material applies only when producing the outline. AI-added
-material is displayed separately in the result and preserved in story history.
+Suggestions live in selectable idea cards. A writer can check one or combine
+several, add an optional note, and continue. They are displayed in the
+conversation and preserved in story history.
 The number of questions is never the normal stopping signal: after every answer,
 the agent decides whether another question would materially improve the result.
 The ceilings exist only for predictable effort and cost when the writer has
@@ -130,8 +127,8 @@ what happened next: how much the writer wrote, whether they changed direction,
 whether they stalled and asked to move on.
 
 After every answer, the agent reassesses the complete conversation: what the
-writer has established, what remains critically unclear, and whether an honest
-scene outline can be assembled without invention. It then asks about the
+writer has established, what remains critically unclear, and whether a scene
+outline can be written yet. It then asks about the
 highest-impact uncertainty in that particular story. There is no fixed sequence
 of premise, character, conflict, structure and scene stages.
 
@@ -195,6 +192,16 @@ outlines and archived drafts in reverse chronological order. Opening an item
 shows the starting idea, the question-and-answer trace, supported facts,
 readiness and unresolved gaps; completed work also shows its scene outline.
 History is read-only and does not replace the active interview.
+
+### Storyline graph
+
+Every completed outline includes a navigable story map above its scene list.
+Each connected node represents one scene and shows its number, slug line, and
+dramatic purpose. Nodes with an unresolved `missing` decision are visually
+flagged. Selecting a node scrolls to the full scene; scrolling through scenes
+updates and horizontally centers the active node. This is a navigation and
+traceability view of the approved outline, not a second AI interpretation of
+the story.
 
 ### Voice answers
 
