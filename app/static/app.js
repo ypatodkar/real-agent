@@ -20,6 +20,42 @@ let speechTarget = null;
 let speechButton = null;
 let speechStatus = null;
 let speechSubmit = null;
+let storyObserver = null;
+let currentWorkspace = "story";
+let currentStoryView = "interview";
+let currentOutline = null;
+let currentOutlineApproved = false;
+let currentSuggestions = [];
+let outlineEditTarget = null;
+
+const WORKSPACES = {
+  screenplay: {
+    title: "Screenplay",
+    description: "Turn the approved outline into a screenplay draft, or import a screenplay you already have.",
+    waiting: "Complete and approve the Story outline to unlock screenplay work.",
+    ready: "Your outline is ready. Screenplay generation and import are the next feature to build.",
+  },
+  breakdown: {
+    title: "Breakdown",
+    description: "Confirm the cast, locations, props, wardrobe, equipment, and production concerns in every scene.",
+    waiting: "This stage will open after a screenplay is approved.",
+  },
+  schedule: {
+    title: "Schedule",
+    description: "Arrange scenes into practical shoot days and catch conflicts before they reach the set.",
+    waiting: "This stage will open after the scene breakdown is confirmed.",
+  },
+  shots: {
+    title: "Shot list",
+    description: "Plan essential coverage, setups, movement, and equipment scene by scene.",
+    waiting: "This stage will open once scenes have been scheduled.",
+  },
+  readiness: {
+    title: "Readiness",
+    description: "See exactly what is ready, at risk, or blocking each shoot day.",
+    waiting: "Readiness will become live as production tasks and shoot days are added.",
+  },
+};
 
 function showNotice(message) {
   $("notice").textContent = message || "";
@@ -33,18 +69,74 @@ function setSaveState(message) {
 function startOver() {
   localStorage.removeItem(STORAGE_KEY);
   projectId = null;
+  currentOutline = null;
+  currentOutlineApproved = false;
+  currentWorkspace = "story";
+  currentStoryView = "interview";
+  $("productionFlow").hidden = true;
+  $("futureView").hidden = true;
   $("interview").hidden = true;
   $("outlineView").hidden = true;
   $("start").hidden = false;
   $("startForm").hidden = true;
   $("pathGrid").hidden = false;
   $("seed").value = "";
-  $("involvement").value = "75";
+  $("involvement").value = "50";
+  const defaultFormat = document.querySelector('input[name="storytellingFormat"][value="not_sure"]');
+  if (defaultFormat) defaultFormat.checked = true;
   renderInvolvement();
   showNotice("");
   setSaveState("");
   $("seed").focus();
   window.scrollTo(0, 0);
+}
+
+document.querySelectorAll(".flow-step").forEach((button) => {
+  button.addEventListener("click", () => openWorkspace(button.dataset.workspace));
+});
+
+$("returnToStory").addEventListener("click", () => openWorkspace("story"));
+
+function openWorkspace(workspace) {
+  if (!projectId) return;
+  currentWorkspace = workspace;
+  $("start").hidden = true;
+  $("interview").hidden = true;
+  $("outlineView").hidden = true;
+  $("futureView").hidden = true;
+
+  if (workspace === "story") {
+    if (currentStoryView === "outline" && currentOutline) {
+      $("outlineView").hidden = false;
+    } else {
+      $("interview").hidden = false;
+    }
+  } else {
+    const view = WORKSPACES[workspace];
+    $("futureTitle").textContent = view.title;
+    $("futureDescription").textContent = view.description;
+    $("futureState").textContent = currentOutlineApproved && workspace === "screenplay"
+      ? view.ready
+      : (currentOutline && workspace === "screenplay"
+        ? "Review and approve the Story outline to unlock screenplay work."
+        : view.waiting);
+    $("futureView").hidden = false;
+  }
+  updateFlow();
+  window.scrollTo(0, 0);
+}
+
+function updateFlow() {
+  $("productionFlow").hidden = !projectId;
+  document.querySelectorAll(".flow-step").forEach((step) => {
+    const workspace = step.dataset.workspace;
+    const active = workspace === currentWorkspace;
+    step.classList.toggle("active", active);
+    step.classList.toggle("complete", workspace === "story" && currentOutlineApproved);
+    step.classList.toggle("available", workspace === "screenplay" && currentOutlineApproved);
+    if (active) step.setAttribute("aria-current", "step");
+    else step.removeAttribute("aria-current");
+  });
 }
 
 $("home").addEventListener("click", () => {
@@ -110,7 +202,7 @@ async function openHistoryDetail(kind, id) {
     return;
   }
 
-  const transcript = (item.transcript || []).filter((turn) => turn.question);
+  const transcript = (item.transcript || []).filter((turn) => turn.question || turn.guidance);
   const scenes = item.outline?.scenes || [];
   $("historyDetail").innerHTML = `
     <button type="button" class="text-button history-detail-back" id="historyBack">← All stories</button>
@@ -121,16 +213,12 @@ async function openHistoryDetail(kind, id) {
     ${(item.established || []).length ? historySection("What was established",
       `<ul>${item.established.map((fact) => `<li>${escape(fact)}</li>`).join("")}</ul>`) : ""}
     ${transcript.length ? historySection("Story trace", `<dl>${transcript.map((turn) => `
-      <div class="trace-turn"><dt>${escape(turn.question)}</dt><dd>${turn.skipped ? "Skipped" : escape(turn.answer || "No answer")}</dd></div>`).join("")}</dl>`) : ""}
+      <div class="trace-turn"><dt>${[turn.guidance, turn.question].filter(Boolean).map(escape).join(" ")}</dt><dd>${turn.skipped ? "Skipped" : escape(turn.answer || "No answer")}</dd></div>`).join("")}</dl>`) : ""}
     ${scenes.length ? historySection("Created outline", scenes.map((scene) => `
       <article class="scene"><div class="scene-n">${escape(scene.n)}</div><div>
         <div class="slug">${escape(scene.slug || "")}</div>
         <p class="scene-action">${escape(scene.action || "")}</p>
-      </div></article>`).join("")) : ""}
-    ${(item.outline?.ai_added || []).length ? historySection("Developed by AI",
-      `<ul>${item.outline.ai_added.map((detail) => `<li>${escape(detail)}</li>`).join("")}</ul>`) : ""}
-    ${(item.critical_gaps || []).length ? historySection("Still unresolved",
-      `<ul>${item.critical_gaps.map((gap) => `<li>${escape(gap)}</li>`).join("")}</ul>`) : ""}`;
+      </div></article>`).join("")) : ""}`;
   $("historyBack").addEventListener("click", () => {
     $("historyDetail").hidden = true;
     $("historyList").hidden = false;
@@ -182,6 +270,7 @@ $("startForm").addEventListener("submit", async (e) => {
 
   const state = await post("/api/project", {
     seed: $("seed").value,
+    storytelling_format: document.querySelector('input[name="storytellingFormat"]:checked')?.value || "not_sure",
     involvement: Number($("involvement").value),
   });
   if (!state || state.error) {
@@ -192,8 +281,8 @@ $("startForm").addEventListener("submit", async (e) => {
 
   projectId = state.project_id;
   localStorage.setItem(STORAGE_KEY, projectId);
-  $("start").hidden = true;
-  $("interview").hidden = false;
+  currentStoryView = "interview";
+  openWorkspace("story");
   render(state);
   $("answer").focus();
 });
@@ -202,12 +291,24 @@ $("startForm").addEventListener("submit", async (e) => {
 
 $("answerForm").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const text = $("answer").value.trim();
+  const selected = [...document.querySelectorAll('#suggestionOptions input[type="checkbox"]:checked')]
+    .map((input) => currentSuggestions[Number(input.dataset.index)])
+    .filter(Boolean);
+  const note = $("answer").value.trim();
+  const choice = selected.length
+    ? `I want to use ${selected.length === 1 ? "this idea" : "these ideas"}:\n${selected.map((idea) => `- ${idea.label}${idea.detail ? ` — ${idea.detail}` : ""}`).join("\n")}`
+    : "";
+  const text = [choice, note].filter(Boolean).join("\n\n");
   if (!text) return;
   await advance("/answer", { text, seconds: (Date.now() - askedAt) / 1000 });
 });
 
 $("skip").addEventListener("click", () => advance("/skip", {}));
+$("suggestIdeas").addEventListener("click", () => advance("/answer", {
+  text: "I’m not sure yet. Give me two or three concrete possibilities I can choose or combine.",
+  request_suggestions: true,
+  seconds: (Date.now() - askedAt) / 1000,
+}));
 $("keepExploring").addEventListener("click", () => advance("/continue", {}));
 
 $("abortProject").addEventListener("click", async () => {
@@ -405,7 +506,9 @@ async function advance(suffix, body) {
 function setThinking(on) {
   $("next").disabled = on;
   $("skip").disabled = on;
+  $("suggestIdeas").disabled = on;
   if (on) {
+    $("assistantGuidance").hidden = true;
     $("question").classList.add("thinking");
     $("question").textContent = "…";
   } else {
@@ -417,7 +520,12 @@ function setThinking(on) {
 
 function render(state) {
   $("goal").textContent = state.goal || "";
+  const guidance = state.guidance || "";
+  $("assistantGuidance").hidden = !guidance;
+  $("assistantGuidance").innerHTML = escape(guidance).replace(/\n/g, "<br>");
+  renderSuggestions(state.suggestions || []);
   $("question").textContent = state.question || "Your story is ready for an outline.";
+  renderConversation(state);
   askedAt = Date.now();
 
   const readiness = Math.max(0, Math.min(100, state.readiness_percent || 0));
@@ -432,10 +540,6 @@ function render(state) {
       ? `<li>${escape(e)}</li>`
       : `<li><span>${escape(e.q)}</span>${escape(e.a)}</li>`)
     .join("");
-
-  const gaps = state.critical_gaps || [];
-  $("interviewGaps").hidden = gaps.length === 0;
-  $("interviewGapsList").innerHTML = gaps.map((g) => `<li>${escape(g)}</li>`).join("");
 
   $("finish").hidden = !state.can_write_up && !state.interview_complete;
   $("writeUp").hidden = !state.can_write_up;
@@ -454,6 +558,58 @@ function render(state) {
   bits.push(`${readiness}% outline readiness`);
   status(bits);
   setSaveState("Saved");
+}
+
+function renderSuggestions(suggestions) {
+  currentSuggestions = suggestions;
+  $("assistantSuggestions").hidden = suggestions.length === 0;
+  $("suggestIdeas").hidden = suggestions.length > 0;
+  $("suggestionOptions").innerHTML = suggestions.map((idea, index) => `
+    <label class="suggestion-option">
+      <input type="checkbox" data-index="${index}">
+      <span class="suggestion-check" aria-hidden="true">✓</span>
+      <span><strong>${escape(idea.label)}</strong><small>${escape(idea.detail || "")}</small></span>
+    </label>`).join("");
+  $("suggestionOptions").querySelectorAll('input[type="checkbox"]').forEach((input) => {
+    input.addEventListener("change", () => {
+      const chosen = $("suggestionOptions").querySelectorAll('input[type="checkbox"]:checked').length;
+      $("next").textContent = chosen ? `Use ${chosen} selected & continue` : "Answer & continue";
+    });
+  });
+  $("next").textContent = "Answer & continue";
+}
+
+function renderConversation(state) {
+  const completed = (state.transcript || []).filter((turn) => turn.answer || turn.skipped);
+  const hasConversation = Boolean(state.seed) || completed.length > 0;
+  $("conversation").hidden = !hasConversation;
+  $("conversationCount").textContent = `${completed.length} exchange${completed.length === 1 ? "" : "s"}`;
+
+  const seed = state.seed
+    ? `<div class="chat-row writer"><span class="chat-label">You began with</span><p>${escape(state.seed)}</p></div>`
+    : "";
+  const turns = completed.map((turn) => {
+    const suggestionList = (turn.suggestions || []).length
+      ? `<ul class="chat-suggestions">${turn.suggestions.map((idea) => `<li><strong>${escape(idea.label)}</strong>${idea.detail ? ` — ${escape(idea.detail)}` : ""}</li>`).join("")}</ul>`
+      : "";
+    const assistant = [turn.guidance, suggestionList, turn.question].filter(Boolean)
+      .map((part) => part === suggestionList ? part : escape(part).replace(/\n/g, "<br>"))
+      .join("<br><br>");
+    const writer = turn.skipped ? "Skipped" : escape(turn.answer || "");
+    return `<div class="conversation-exchange">
+      <div class="chat-row assistant">
+        <span class="chat-label">Story editor${turn.response_kind && turn.response_kind !== "question" ? ` · ${escape(turn.response_kind)}` : ""}</span>
+        <p>${assistant}</p>
+      </div>
+      <div class="chat-row writer${turn.skipped ? " skipped" : ""}">
+        <span class="chat-label">You</span><p>${writer}</p>
+      </div>
+    </div>`;
+  }).join("");
+  $("conversationTurns").innerHTML = seed + turns;
+  // The rail scrolls on its own, so pin it to the latest exchange after every
+  // render — otherwise a long history opens at the oldest question.
+  $("conversation").scrollTop = $("conversation").scrollHeight;
 }
 
 function escape(s) {
@@ -515,9 +671,13 @@ if (savedProject) {
     .then((r) => r.ok ? r.json() : Promise.reject())
     .then((state) => {
       projectId = state.project_id;
-      $("start").hidden = true;
-      $("interview").hidden = false;
-      render(state);
+      if (state.outline) {
+        showOutline(state.outline, state.outline_approved);
+      } else {
+        currentStoryView = "interview";
+        openWorkspace("story");
+        render(state);
+      }
     })
     .catch(() => localStorage.removeItem(STORAGE_KEY));
 }
@@ -535,55 +695,182 @@ $("writeUp").addEventListener("click", async () => {
     showNotice(res?.error || "Could not assemble the outline.");
     return;
   }
-  showOutline(res.outline);
+  showOutline(res.outline, res.outline_approved);
+});
+
+$("approveOutline").addEventListener("click", async () => {
+  const button = $("approveOutline");
+  button.disabled = true;
+  button.textContent = "Approving…";
+  const state = await post(`/api/project/${projectId}/approve-outline`, {});
+  button.disabled = false;
+  button.textContent = "Approve outline & continue";
+  if (!state || state.error) return;
+  currentOutlineApproved = true;
+  $("approveOutline").hidden = true;
+  updateFlow();
+  openWorkspace("screenplay");
 });
 
 $("backToInterview").addEventListener("click", () => {
+  currentStoryView = "interview";
   $("outlineView").hidden = true;
   $("interview").hidden = false;
+  updateFlow();
   $("answer").focus();
 });
 
-function showOutline(o) {
+function showOutline(o, approved = false) {
+  currentOutline = o;
+  currentOutlineApproved = Boolean(approved);
+  currentWorkspace = "story";
+  currentStoryView = "outline";
   $("interview").hidden = true;
+  $("futureView").hidden = true;
   $("outlineView").hidden = false;
+  updateFlow();
 
   $("outTitle").textContent = o.title || "Untitled";
   $("outLogline").textContent = o.logline || "";
+  $("approveOutline").hidden = currentOutlineApproved;
 
-  $("scenes").innerHTML = (o.scenes || []).map((s) => `
-    <article class="scene">
+  const outlineScenes = o.scenes || [];
+  renderStoryGraph(outlineScenes);
+
+  $("scenes").innerHTML = outlineScenes.map((s, index) => `
+    <article class="scene" id="outline-scene-${index + 1}" data-scene-index="${index}">
       <div class="scene-n">${s.n}</div>
       <div>
-        <div class="slug">${escape(s.slug || "")}</div>
+        <div class="scene-heading-row">
+          <div class="slug">${escape(s.slug || "")}</div>
+          <button type="button" class="edit-button edit-scene" data-scene-index="${index}">Edit</button>
+        </div>
         ${s.who?.length ? `<div class="who">${escape(s.who.join(" · "))}</div>` : ""}
         <p class="scene-action">${escape(s.action || "")}</p>
         <p class="scene-why">${escape(s.why || "")}</p>
-        ${s.missing ? `<p class="scene-missing">Undecided: ${escape(s.missing)}</p>` : ""}
       </div>
     </article>`).join("");
 
-  const gaps = o.gaps || [];
-  $("gapsBox").hidden = gaps.length === 0;
-  $("gapsList").innerHTML = gaps.map((g) => `<li>${escape(g)}</li>`).join("");
+  window.scrollTo(0, 0);
+  status([`${(o.scenes || []).length} scenes`]);
 
-  const aiAdded = o.ai_added || [];
-  $("aiAddedBox").hidden = aiAdded.length === 0;
-  $("aiAddedList").innerHTML = aiAdded.map((detail) => `<li>${escape(detail)}</li>`).join("");
+  connectStoryGraph();
+  document.querySelectorAll(".edit-scene").forEach((button) => {
+    button.addEventListener("click", () => openSceneEditor(Number(button.dataset.sceneIndex)));
+  });
+}
 
-  // The audit is the promise being kept in public: if a name appears that the
-  // writer never typed, say so rather than hoping nobody checks.
-  const flagged = o.unsupported || [];
-  const existing = document.querySelector(".flagged");
-  if (existing) existing.remove();
-  if (flagged.length) {
-    const el = document.createElement("p");
-    el.className = "flagged";
-    el.textContent = `These appear in the outline but you never mentioned them: ${flagged.join(", ")}`;
-    $("outlineView").appendChild(el);
+$("editOutlineHeader").addEventListener("click", openOutlineHeaderEditor);
+$("closeOutlineEditor").addEventListener("click", closeOutlineEditor);
+$("cancelOutlineEdit").addEventListener("click", closeOutlineEditor);
+
+function editField(label, name, value, rows = 2) {
+  return `<label class="field"><span class="label">${escape(label)}</span>
+    <textarea name="${escape(name)}" rows="${rows}">${escape(value || "")}</textarea></label>`;
+}
+
+function openOutlineHeaderEditor() {
+  outlineEditTarget = { type: "header" };
+  $("outlineEditorTitle").textContent = "Edit title and logline";
+  $("outlineEditFields").innerHTML =
+    editField("Title", "title", currentOutline.title, 2) +
+    editField("Logline", "logline", currentOutline.logline, 4);
+  $("outlineEditor").showModal();
+}
+
+function openSceneEditor(index) {
+  const scene = currentOutline.scenes[index];
+  if (!scene) return;
+  outlineEditTarget = { type: "scene", index };
+  $("outlineEditorTitle").textContent = `Edit scene ${index + 1}`;
+  $("outlineEditFields").innerHTML =
+    editField("Slug line", "slug", scene.slug, 2) +
+    editField("Characters — separated by commas", "who", (scene.who || []).join(", "), 2) +
+    editField("What happens", "action", scene.action, 7) +
+    editField("Purpose of the scene", "why", scene.why, 3);
+  $("outlineEditor").showModal();
+}
+
+function closeOutlineEditor() {
+  outlineEditTarget = null;
+  $("outlineEditor").close();
+}
+
+$("outlineEditForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!outlineEditTarget || !currentOutline) return;
+  const data = new FormData(event.target);
+  const updated = structuredClone(currentOutline);
+  if (outlineEditTarget.type === "header") {
+    updated.title = String(data.get("title") || "").trim();
+    updated.logline = String(data.get("logline") || "").trim();
+  } else {
+    const scene = updated.scenes[outlineEditTarget.index];
+    scene.slug = String(data.get("slug") || "").trim();
+    scene.who = String(data.get("who") || "").split(",").map((name) => name.trim()).filter(Boolean);
+    scene.action = String(data.get("action") || "").trim();
+    scene.why = String(data.get("why") || "").trim();
   }
 
-  window.scrollTo(0, 0);
-  status([`${(o.scenes || []).length} scenes`, `${gaps.length} still undecided`,
-          flagged.length ? `${flagged.length} unsupported` : "nothing invented"]);
+  const button = $("saveOutlineEdit");
+  button.disabled = true;
+  button.textContent = "Saving…";
+  const state = await post(`/api/project/${projectId}/edit-outline`, { outline: updated });
+  button.disabled = false;
+  button.textContent = "Save changes";
+  if (!state || state.error) return;
+  $("outlineEditor").close();
+  outlineEditTarget = null;
+  showOutline(state.outline, state.outline_approved);
+  showNotice("Outline updated. Review and approve the new version when it is ready.");
+});
+
+function renderStoryGraph(scenes) {
+  $("storyGraphSection").hidden = scenes.length === 0;
+  $("storyGraphCount").textContent = `${scenes.length} scene${scenes.length === 1 ? "" : "s"}`;
+  $("storyGraph").innerHTML = scenes.map((scene, index) => `
+    <div class="story-node-wrap">
+      <button type="button" class="story-node${index === 0 ? " active" : ""}"
+        data-scene-index="${index}" aria-label="Go to scene ${escape(scene.n || index + 1)}"
+        ${index === 0 ? 'aria-current="step"' : ""}>
+        <span class="story-node-number">${escape(scene.n || index + 1)}</span>
+        <span class="story-node-slug">${escape(scene.slug || "Unspecified scene")}</span>
+        <span class="story-node-purpose">${escape(scene.why || scene.action || "")}</span>
+      </button>
+    </div>`).join("");
+}
+
+function connectStoryGraph() {
+  storyObserver?.disconnect();
+  const nodes = [...document.querySelectorAll(".story-node")];
+  const scenes = [...document.querySelectorAll("#scenes .scene")];
+
+  function activateScene(index, center = false) {
+    nodes.forEach((node, i) => {
+      node.classList.toggle("active", i === index);
+      if (i === index) node.setAttribute("aria-current", "step");
+      else node.removeAttribute("aria-current");
+    });
+    if (center && nodes[index]) {
+      const viewport = $("storyGraphViewport");
+      const left = nodes[index].offsetLeft - (viewport.clientWidth - nodes[index].offsetWidth) / 2;
+      viewport.scrollTo({ left: Math.max(0, left), behavior: "smooth" });
+    }
+  }
+
+  nodes.forEach((node) => {
+    node.addEventListener("click", () => {
+      const index = Number(node.dataset.sceneIndex);
+      activateScene(index, true);
+      scenes[index]?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  });
+
+  storyObserver = new IntersectionObserver((entries) => {
+    const visible = entries
+      .filter((entry) => entry.isIntersecting)
+      .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+    if (visible) activateScene(Number(visible.target.dataset.sceneIndex), true);
+  }, { rootMargin: "-20% 0px -55%", threshold: [0.15, 0.45, 0.75] });
+  scenes.forEach((scene) => storyObserver.observe(scene));
 }

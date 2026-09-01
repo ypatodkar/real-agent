@@ -22,6 +22,29 @@
   </div>
 </header>
 
+<nav class="production-flow" id="productionFlow" aria-label="Film production flow" hidden>
+  <div class="flow-track">
+    <button type="button" class="flow-step active" data-workspace="story" aria-current="step">
+      <span class="flow-marker">1</span><span>Story</span>
+    </button>
+    <button type="button" class="flow-step" data-workspace="screenplay">
+      <span class="flow-marker">2</span><span>Screenplay</span>
+    </button>
+    <button type="button" class="flow-step" data-workspace="breakdown">
+      <span class="flow-marker">3</span><span>Breakdown</span>
+    </button>
+    <button type="button" class="flow-step" data-workspace="schedule">
+      <span class="flow-marker">4</span><span>Schedule</span>
+    </button>
+    <button type="button" class="flow-step" data-workspace="shots">
+      <span class="flow-marker">5</span><span>Shot list</span>
+    </button>
+    <button type="button" class="flow-step" data-workspace="readiness">
+      <span class="flow-marker">6</span><span>Readiness</span>
+    </button>
+  </div>
+</nav>
+
 <div class="notice" id="notice" role="status" aria-live="polite" hidden></div>
 
 <div class="history-shell" id="historyShell" hidden>
@@ -73,12 +96,21 @@
       </div>
       <button type="button" class="text-button" id="changePath">Change path</button>
     </div>
+    <fieldset class="format-field">
+      <legend>How will the audience hear the story?</legend>
+      <div class="format-options">
+        <label><input type="radio" name="storytellingFormat" value="narrated"><span><strong>Narrated</strong><small>A voice carries most of the story</small></span></label>
+        <label><input type="radio" name="storytellingFormat" value="dialogue_led"><span><strong>Dialogue-led</strong><small>Characters carry it through conversation</small></span></label>
+        <label><input type="radio" name="storytellingFormat" value="hybrid"><span><strong>Hybrid</strong><small>Narration and dialogue share the work</small></span></label>
+        <label><input type="radio" name="storytellingFormat" value="not_sure" checked><span><strong>Not sure yet</strong><small>Let the material reveal the right form</small></span></label>
+      </div>
+    </fieldset>
     <section class="involvement-field">
       <div class="involvement-heading">
         <label for="involvement">How involved do you want to be?</label>
-        <output id="involvementValue" for="involvement">75%</output>
+        <output id="involvementValue" for="involvement">50%</output>
       </div>
-      <input type="range" id="involvement" min="0" max="100" step="1" value="75">
+      <input type="range" id="involvement" min="0" max="100" step="1" value="50">
       <div class="range-labels" aria-hidden="true">
         <span>AI takes the lead</span>
         <span>I shape every choice</span>
@@ -109,6 +141,8 @@
 <!-- ------------------------------------------------------------ interview -->
 <main id="interview" class="stage-view" hidden>
 
+  <div class="interview-main">
+
   <section class="readiness" aria-label="Outline readiness">
     <div class="readiness-label">
       <span>Outline readiness</span>
@@ -121,12 +155,17 @@
 
   <section class="ask" id="askPanel">
     <p class="stage-goal" id="goal"></p>
+    <div class="assistant-guidance" id="assistantGuidance" hidden></div>
+    <fieldset class="assistant-suggestions" id="assistantSuggestions" hidden>
+      <legend>Ideas to consider <span>Choose one or combine a few</span></legend>
+      <div id="suggestionOptions"></div>
+    </fieldset>
     <h2 class="question" id="question">…</h2>
 
     <form id="answerForm">
       <div class="answer-field">
         <textarea id="answer" rows="6"
-          placeholder="Think out loud. Half-formed is fine — that's the point."
+          placeholder="Add a note, change an idea, or answer in your own words."
           aria-label="Your answer"></textarea>
         <button type="button" class="mic-button" id="mic" aria-label="Start voice typing"
           title="Start voice typing" disabled>
@@ -138,6 +177,7 @@
       <p class="speech-state" id="speechState" aria-live="polite"></p>
       <div class="actions">
         <button type="submit" class="primary" id="next">Answer &amp; continue</button>
+        <button type="button" class="ghost" id="suggestIdeas">Give me options</button>
         <button type="button" class="ghost" id="skip">Skip this one</button>
         <span class="counter" id="counter"></span>
       </div>
@@ -150,11 +190,6 @@
     <span class="hint" id="finishNote"></span>
   </div>
 
-  <aside class="gaps interview-gaps" id="interviewGaps" hidden>
-    <h3>What still needs clarity</h3>
-    <ul id="interviewGapsList"></ul>
-  </aside>
-
   <aside class="established" id="established" hidden>
     <h3>What you've established</h3>
     <ul id="establishedList"></ul>
@@ -165,33 +200,79 @@
     <span>Your answers and the latest story assessment will be archived.</span>
   </div>
 
+  </div><!-- /.interview-main -->
+
+  <!-- the conversation reads as a rail beside the question, never above it -->
+  <aside class="conversation" id="conversation" aria-labelledby="conversationTitle" hidden>
+    <header class="conversation-heading">
+      <h2 id="conversationTitle">Story conversation</h2>
+      <span id="conversationCount"></span>
+    </header>
+    <div class="conversation-turns" id="conversationTurns"></div>
+  </aside>
+
 </main>
 
 <!-- ------------------------------------------------------------ outline -->
 <main id="outlineView" class="stage-view" hidden>
   <header class="masthead">
-    <p class="eyebrow">Your outline — assembled from your answers, nothing added</p>
-    <h1 id="outTitle"></h1>
-    <p class="standfirst" id="outLogline"></p>
+    <p class="eyebrow">Your outline</p>
+    <div class="outline-heading-row">
+      <div>
+        <h1 id="outTitle"></h1>
+        <p class="standfirst" id="outLogline"></p>
+      </div>
+      <button type="button" class="edit-button" id="editOutlineHeader">Edit title &amp; logline</button>
+    </div>
   </header>
+
+  <section class="story-graph" id="storyGraphSection" aria-labelledby="storyGraphTitle" hidden>
+    <div class="story-graph-heading">
+      <div>
+        <p class="eyebrow">Story map</p>
+        <h2 id="storyGraphTitle">Follow the story scene by scene.</h2>
+      </div>
+      <span id="storyGraphCount"></span>
+    </div>
+    <div class="story-graph-viewport" id="storyGraphViewport">
+      <div class="story-graph-track" id="storyGraph"></div>
+    </div>
+    <p class="story-graph-hint">Select a node to jump to that scene.</p>
+  </section>
 
   <section id="scenes"></section>
 
-  <aside class="gaps" id="gapsBox" hidden>
-    <h3>Still undecided</h3>
-    <ul id="gapsList"></ul>
-  </aside>
-
-  <aside class="ai-added" id="aiAddedBox" hidden>
-    <h3>Developed by AI</h3>
-    <p>These details were added under your selected collaboration level.</p>
-    <ul id="aiAddedList"></ul>
-  </aside>
-
   <div class="actions" style="margin-top:40px">
     <button type="button" class="ghost" id="backToInterview">Keep developing</button>
-    <button type="button" class="primary" id="newProject">Start another film</button>
+    <button type="button" class="primary" id="approveOutline">Approve outline &amp; continue</button>
+    <button type="button" class="text-button" id="newProject">Start another film</button>
   </div>
+</main>
+
+<dialog class="outline-editor" id="outlineEditor" aria-labelledby="outlineEditorTitle">
+  <form id="outlineEditForm">
+    <header class="outline-editor-header">
+      <div>
+        <p class="eyebrow">Edit outline</p>
+        <h2 id="outlineEditorTitle">Edit</h2>
+      </div>
+      <button type="button" class="icon-button" id="closeOutlineEditor" aria-label="Close editor">×</button>
+    </header>
+    <div id="outlineEditFields"></div>
+    <div class="actions">
+      <button type="submit" class="primary" id="saveOutlineEdit">Save changes</button>
+      <button type="button" class="ghost" id="cancelOutlineEdit">Cancel</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ------------------------------------------------------ future workspaces -->
+<main id="futureView" class="stage-view future-view" hidden>
+  <p class="eyebrow" id="futureEyebrow">Next stage</p>
+  <h1 id="futureTitle">Screenplay</h1>
+  <p class="standfirst" id="futureDescription"></p>
+  <div class="future-state" id="futureState"></div>
+  <button type="button" class="ghost" id="returnToStory">← Return to Story</button>
 </main>
 
 <footer class="status" id="status"></footer>
