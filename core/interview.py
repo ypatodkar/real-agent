@@ -1,17 +1,9 @@
-"""The interviewer.
+"""The collaborative story editor.
 
-Every other AI writing tool generates. You give it a premise, it gives you a
-story, and the story is the model's. This one asks the question a good script
-editor would ask and then gets out of the way.
-
-The hard rule, enforced in the prompt and checked after: **never propose the
-answer.** No "perhaps he could…", no three options to choose from, no example
-that is really a suggestion. A question that contains its own answer has done
-the writer's thinking for them, which is the one thing this must not do.
-
-After every answer the model reassesses the whole conversation, identifies the
-highest-impact unresolved issue, and asks about that. The bank of question
-shapes is only an offline fallback; it does not control the live interview.
+The editor follows the writer's material, asks useful questions, and can also
+offer clearly labeled possibilities when the writer asks for help or is stuck.
+Suggestions are never silently promoted to story facts: they become canonical
+only when the writer chooses or develops them.
 """
 
 from __future__ import annotations
@@ -130,45 +122,73 @@ FALLBACK_QUESTIONS = {
 }
 
 
-def fallback_question(shape: Shape) -> str:
+def fallback_question(shape: Shape, session: "Session | None" = None) -> str:
+    """Return a safe question that still reacts to the interview's state."""
+    if session and not session.turns:
+        if not session.seed:
+            return "What is the first image you can see, even if you do not know what it means yet?"
+        return "Where does this idea first become visible on screen?"
+    if session and session.answered() and session.answered()[-1].words < 8:
+        return "What would we actually see happening in that moment?"
     return FALLBACK_QUESTIONS[shape.id]
 
 
 # --------------------------------------------------------------- the prompt
 
-SYSTEM = """You are a script editor developing a 5 to 20 minute short film
-with its writer. After every answer, reassess the ENTIRE conversation. Identify
-the single highest-impact unresolved issue in this particular story and ask the
-question that will move it forward most.
+SYSTEM = """You are a collaborative story editor developing a 5 to 20 minute
+short film with its writer. After every answer, reassess the ENTIRE conversation
+and respond in the way that helps most: a focused question, a useful reflection,
+or concrete creative suggestions.
 
 There is no prescribed sequence and no checklist to march through. Do not ask
 about character, conflict, structure, or scenes merely because those are common
 screenwriting categories. Follow the material. If an answer already establishes
 several things, accept that and investigate what now matters most.
 
-ABSOLUTE RULE — you never propose the answer.
+HOW TO HELP:
+  - Help freely. Offer ideas, examples, images, lines and possible directions
+    whenever they would move the film forward, asked for or not.
+  - Propose concrete material rather than sending the writer back to a blank
+    page. A specific fork is easier to react to than an open question.
+  - Explain the creative consequence of each possibility rather than producing
+    arbitrary idea lists.
+  - Put selectable ideas in `suggestions`. Each needs a short label and one
+    sentence explaining its dramatic effect.
+  - Keep `guidance` under 80 words. If a response includes suggestions, end
+    with one simple question inviting the writer to choose, combine, reject,
+    or adapt them.
 
-Forbidden, every time:
-  - offering options ("it could be A, or B")
-  - suggesting content ("perhaps he is a widower")
-  - writing any part of their film for them
-  - examples that are really suggestions
-  - praise ("great idea!") — it is noise and it flatters them into stopping
-
-Allowed:
-  - one question
-  - at most one short sentence before it, only if it names something they
-    actually said, to show you were listening
+QUESTION QUALITY:
+  - Build the question from a concrete detail in the writer's latest answer.
+  - Prefer actions, images, choices, reversals and consequences over labels,
+    biography, theme, or general explanation.
+  - Ask for one decision at a time. Never hide two questions behind "and".
+  - Do not ask the writer to repeat something already established.
+  - If the latest answer is vague, make that exact vagueness specific before
+    moving to another subject.
+  - A useful question should change a scene, not merely enrich a profile.
 
 Write like a person, not a form. Warm, direct, curious. Short.
 Use their own words back at them. Concrete beats abstract every time.
 
-Assess whether the existing material can support an honest 4–9 scene outline
-without invention. A high readiness score requires enough specific, visible
-events and consequential change to arrange a beginning, development and ending.
-Do not penalize an unconventional story for lacking conventional plot machinery.
+Assess whether the existing material can support a 4–9 scene outline.
+Consider four lenses without marching through them as a
+checklist: whose action carries the film, what creates pressure or change, what
+visible sequence of events can be arranged, and what final change or image the
+film earns. A high score needs concrete scene material, not merely a compelling
+theme or character biography. Do not penalize an unconventional story for
+lacking conventional plot machinery.
+
+`established` contains the atomic facts the film is now built on, whether the
+writer supplied them or you developed them. `critical_gaps` contains at most three specific decisions that currently
+prevent an outline, ordered by impact. Never lower readiness substantially just
+because the story became more interesting: a drop of 0.15 or more requires a
+new, concrete critical gap created by the latest answer.
 
 Return JSON with:
+  response_kind   question | reflection | suggestions | coach
+  guidance        helpful response before the next question; empty is allowed
+  suggestions     2–3 selectable {id, label, detail} ideas, or an empty list
   question        one next question; empty only when no critical gap remains
   listening_for   what useful new information the answer might establish
   focus            a short label you choose for the uncertainty being explored
@@ -179,25 +199,6 @@ Return JSON with:
   should_continue  whether another question is more useful than outlining now
 """
 
-FORBIDDEN = [
-    re.compile(r"\b(?:you could|you might|perhaps|maybe|what if.{0,40}\bwas\b)", re.I),
-    re.compile(r"\b(?:for example|for instance|such as|e\.g\.)", re.I),
-    re.compile(r"\b(?:option|alternatively|or you can)\b", re.I),
-    re.compile(r"\b(?:great|love it|nice|excellent|brilliant|good idea)\b", re.I),
-]
-
-
-def leaks_an_answer(question: str) -> str | None:
-    """Catch the model doing the writer's thinking. Returns the offending bit."""
-    for pattern in FORBIDDEN:
-        hit = pattern.search(question)
-        if hit:
-            return hit.group(0)
-    if question.count("?") > 1:
-        return "more than one question"
-    return None
-
-
 # --------------------------------------------------------------- the session
 
 
@@ -206,6 +207,9 @@ class Turn:
     shape_id: str
     stage: str
     question: str
+    guidance: str = ""
+    response_kind: str = "question"
+    suggestions: list[dict[str, str]] = field(default_factory=list)
     answer: str = ""
     words: int = 0          # how much they wrote — the signal that matters
     skipped: bool = False
@@ -215,7 +219,8 @@ class Turn:
 class Session:
     project_id: str
     seed: str = ""                       # whatever fragment they started with
-    involvement: int = 75                 # 0 = AI leads, 100 = writer authors every choice
+    storytelling_format: str = "not_sure"  # narrated | dialogue_led | hybrid | not_sure
+    involvement: int = 50                 # 0 = AI leads, 100 = writer authors every choice
     turns: list[Turn] = field(default_factory=list)
     readiness: float = 0.0
     readiness_reason: str = "The story has not been assessed yet."
@@ -223,6 +228,7 @@ class Session:
     established: list[str] = field(default_factory=list)
     ready_streak: int = 0
     complete: bool = False
+    outline_approved: bool = False
 
     @property
     def collaboration_mode(self) -> str:
@@ -250,14 +256,30 @@ class Session:
 
     def transcript(self, limit: int = 6) -> str:
         return "\n\n".join(
-            f"Q: {t.question}\nA: {t.answer or '(skipped)'}"
+            f"ASSISTANT ({t.response_kind}): "
+            f"{' '.join(part for part in [t.guidance, *[s.get('label', '') + ': ' + s.get('detail', '') for s in t.suggestions], t.question] if part)}\n"
+            f"WRITER: {t.answer or '(skipped)'}"
             for t in self.turns[-limit:]
         )
 
     def apply_assessment(self, payload: dict[str, Any]) -> None:
-        self.readiness = max(0.0, min(1.0, float(payload.get("readiness", 0))))
+        previous_readiness = self.readiness
+        previous_reason = self.readiness_reason
+        previous_gaps = set(self.critical_gaps)
+        proposed_readiness = max(0.0, min(1.0, float(payload.get("readiness", 0))))
+        proposed_gaps = [str(g).strip() for g in payload.get("critical_gaps", []) if str(g).strip()]
+
+        # A richer answer may reveal a real new problem, but unexplained score
+        # collapses make the interview feel arbitrary. Hold the prior score
+        # unless the assessment names a newly introduced concrete gap.
+        new_gaps = set(proposed_gaps) - previous_gaps
+        if previous_readiness - proposed_readiness >= 0.15 and not new_gaps:
+            proposed_readiness = previous_readiness
+            payload = {**payload, "reason": previous_reason}
+
+        self.readiness = proposed_readiness
         self.readiness_reason = str(payload.get("reason") or "").strip()
-        self.critical_gaps = [str(g).strip() for g in payload.get("critical_gaps", []) if str(g).strip()]
+        self.critical_gaps = proposed_gaps[:3]
         self.established = [str(f).strip() for f in payload.get("established", []) if str(f).strip()]
 
         model_ready = (
@@ -295,7 +317,8 @@ def choose_shape(session: Session, ranking: list[str] | None = None) -> Shape:
     return pool[0]
 
 
-def build_prompt(session: Session, historical_focuses: list[str] | None = None) -> str:
+def build_prompt(session: Session, historical_focuses: list[str] | None = None,
+                 require_suggestions: bool = False) -> str:
     mode_guidance = {
         "ai_led": "The writer wants a very short interview before the AI develops missing material. Decide dynamically when enough direction exists; usually 2–4 questions, never more than 5.",
         "collaborative": "The writer wants a moderate collaborative interview. Decide dynamically when the important decisions are established; usually 4–7 questions, never more than 9.",
@@ -303,29 +326,80 @@ def build_prompt(session: Session, historical_focuses: list[str] | None = None) 
     }
     parts = [
         f"Creative involvement: {session.involvement}/100 ({session.collaboration_mode}).",
+        f"Storytelling format: {session.storytelling_format}.",
         mode_guidance[session.collaboration_mode],
-        "During the interview you still ask without suggesting answers; permission to invent applies only to the later outline stage.",
+        "Suggestions are allowed under the collaboration rules, but only the writer's accepted choices become established story facts.",
     ]
+    format_guidance = {
+        "narrated": "Test point of view, the narrator's relationship to the images, and what the audience hears versus sees.",
+        "dialogue_led": "Test speakers, subtext, changing conversational power, and what remains visual rather than spoken.",
+        "hybrid": "Test which information narration owns and which conflict dialogue must dramatize.",
+        "not_sure": "Use the material to help reveal which storytelling form serves it; do not force a format choice early.",
+    }
+    parts.append(format_guidance.get(session.storytelling_format, format_guidance["not_sure"]))
     if session.seed:
         parts.append(f"What they started with: {session.seed}")
     if session.turns:
         parts.append(f"So far:\n{session.transcript(limit=MAX_CONTEXT_TURNS)}")
+        answered = session.answered()
+        if answered:
+            parts.append(f"LATEST ANSWER — the next question should grow from this:\n{answered[-1].answer}")
+        previous_questions = [t.question for t in session.turns if t.question]
+        parts.append("Do not repeat or lightly rephrase any of these previous questions:\n- "
+                     + "\n- ".join(previous_questions[-8:]))
     if historical_focuses:
         parts.append("Historically productive focus labels from Grafana (weak evidence only; do not force one): "
                      + ", ".join(historical_focuses[:5]))
+    if require_suggestions:
+        parts.append(
+            "THE WRITER PRESSED 'GIVE ME OPTIONS'. This response MUST use "
+            "response_kind `suggestions` and return 2–3 concrete selectable "
+            "suggestions. Do not respond with another question alone."
+        )
     parts.append("Reassess the story and decide what it needs next. JSON only.")
     return "\n".join(parts)
 
 
-def parse(payload: dict[str, Any]) -> dict[str, Any]:
-    """Validate a dynamic assessment and refuse a question that answers itself."""
+def _question_key(question: str) -> set[str]:
+    stop = {"what", "when", "where", "which", "that", "this", "with", "from",
+            "does", "would", "could", "your", "their", "about", "have", "into"}
+    return {word for word in re.findall(r"[a-z']{4,}", question.lower()) if word not in stop}
+
+
+def parse(payload: dict[str, Any], session: Session | None = None,
+          require_suggestions: bool = False) -> dict[str, Any]:
+    """Validate a collaborative response and keep suggestions out of questions."""
     question = (payload.get("question") or "").strip()
+    guidance = str(payload.get("guidance") or "").strip()
+    response_kind = str(payload.get("response_kind") or "question").strip()
+    if response_kind not in {"question", "reflection", "suggestions", "coach"}:
+        raise ValueError("invalid response_kind")
+    suggestions = []
+    for index, item in enumerate(payload.get("suggestions") or [], 1):
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label") or "").strip()
+        detail = str(item.get("detail") or "").strip()
+        if label:
+            suggestions.append({
+                "id": str(item.get("id") or f"idea_{index}").strip()[:50],
+                "label": label[:100],
+                "detail": detail[:260],
+            })
+    suggestions = suggestions[:3]
+    if response_kind == "suggestions" and len(suggestions) < 2:
+        raise ValueError("suggestion responses need at least two selectable ideas")
+    if require_suggestions and response_kind != "suggestions":
+        raise ValueError("the writer explicitly requested selectable suggestions")
     if not question and payload.get("should_continue", True):
         raise ValueError("no question in response")
 
-    leak = leaks_an_answer(question)
-    if leak:
-        raise ValueError(f"question proposes an answer ({leak!r}): {question!r}")
+    if session and question:
+        candidate = _question_key(question)
+        for turn in session.turns[-8:]:
+            previous = _question_key(turn.question)
+            if candidate and previous and len(candidate & previous) / max(1, min(len(candidate), len(previous))) >= 0.8:
+                raise ValueError(f"question repeats an earlier question: {question!r}")
 
     try:
         readiness = float(payload.get("readiness", 0))
@@ -337,6 +411,9 @@ def parse(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         **payload,
         "question": question,
+        "guidance": guidance[:1600],
+        "response_kind": response_kind,
+        "suggestions": suggestions,
         "focus": str(payload.get("focus") or "story").strip()[:80],
         "listening_for": str(payload.get("listening_for") or "useful story detail").strip(),
         "readiness": readiness,
@@ -345,9 +422,20 @@ def parse(payload: dict[str, Any]) -> dict[str, Any]:
 
 QUESTION_SCHEMA = {
     "type": "object",
-    "required": ["question", "listening_for", "focus", "established",
+    "required": ["response_kind", "guidance", "suggestions", "question", "listening_for", "focus", "established",
                  "critical_gaps", "readiness", "reason", "should_continue"],
     "properties": {
+        "response_kind": {"type": "string", "enum": ["question", "reflection", "suggestions", "coach"]},
+        "guidance": {"type": "string"},
+        "suggestions": {"type": "array", "items": {
+            "type": "object",
+            "required": ["id", "label", "detail"],
+            "properties": {
+                "id": {"type": "string"},
+                "label": {"type": "string"},
+                "detail": {"type": "string"},
+            },
+        }},
         "question": {"type": "string"},
         "listening_for": {"type": "string"},
         "focus": {"type": "string"},

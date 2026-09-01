@@ -27,6 +27,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from core import interview, scriptwright, speech, telemetry  # noqa: E402
+from core.database import initialize  # noqa: E402
 from core.model import ProviderError, get_client, load_dotenv  # noqa: E402
 
 load_dotenv()
@@ -42,7 +43,8 @@ SPEECH_ON = False
 
 
 def init_database() -> None:
-    with sqlite3.connect(DATABASE) as db:
+    db = initialize(DATABASE)
+    try:
         db.execute("""
             CREATE TABLE IF NOT EXISTS drafts (
                 id TEXT PRIMARY KEY,
@@ -58,6 +60,9 @@ def init_database() -> None:
                 created_at REAL NOT NULL
             )
         """)
+        db.commit()
+    finally:
+        db.close()
 
 
 init_database()
@@ -65,12 +70,12 @@ init_database()
 
 DRAFT_SYSTEM = """You are closing a short-film development session and saving
 an accurate draft for its writer. Reassess the complete conversation and
-summarize only what the writer established. Do not invent, complete, improve,
-or suggest story content. Unresolved decisions belong in critical_gaps.
+summarize what the session arrived at. Unresolved decisions belong in
+critical_gaps.
 
 Return JSON with: title, summary, established, critical_gaps, readiness, reason.
 Readiness is from 0 to 1 and measures whether the material can support an
-honest 4–9 scene outline without invention."""
+4–9 scene outline."""
 
 DRAFT_SCHEMA = {
     "type": "object",
@@ -101,13 +106,15 @@ def load(project_id: str) -> interview.Session | None:
     raw = json.loads(path.read_text())
     session = interview.Session(
         project_id=raw["project_id"], seed=raw.get("seed", ""),
-        involvement=int(raw.get("involvement", 75)),
+        storytelling_format=raw.get("storytelling_format", "not_sure"),
+        involvement=int(raw.get("involvement", 50)),
         readiness=raw.get("readiness", 0.0),
         readiness_reason=raw.get("readiness_reason", "The story has not been assessed yet."),
         critical_gaps=raw.get("critical_gaps", []),
         established=raw.get("established", []),
         ready_streak=raw.get("ready_streak", 0),
         complete=raw.get("complete", False),
+        outline_approved=raw.get("outline_approved", False),
     )
     session.turns = [interview.Turn(**t) for t in raw.get("turns", [])]
     # Older sessions were marked complete after 15 answers regardless of the
@@ -121,6 +128,7 @@ def save(session: interview.Session) -> None:
     path_for(session.project_id).write_text(json.dumps({
         "project_id": session.project_id,
         "seed": session.seed,
+        "storytelling_format": session.storytelling_format,
         "involvement": session.involvement,
         "turns": [t.__dict__ for t in session.turns],
         "readiness": session.readiness,
@@ -129,6 +137,7 @@ def save(session: interview.Session) -> None:
         "established": session.established,
         "ready_streak": session.ready_streak,
         "complete": session.complete,
+        "outline_approved": session.outline_approved,
         "updated": time.time(),
     }, indent=2))
 
@@ -270,7 +279,6 @@ def history_detail(kind: str, item_id: str) -> dict | None:
             "readiness": project.get("readiness", 0),
             "reason": project.get("readiness_reason", ""),
             "established": project.get("established", []),
-            "critical_gaps": outline.get("gaps", []),
             "transcript": project.get("turns", []), "outline": outline,
             "created_at": outline_path.stat().st_mtime,
         }
@@ -280,8 +288,13 @@ def history_detail(kind: str, item_id: str) -> dict | None:
 # ----------------------------------------------------------------- the ask
 
 
-def next_question(session: interview.Session, force: bool = False) -> dict:
+def next_question(session: interview.Session, force: bool = False,
+                  require_suggestions: bool = False) -> dict:
     """Reassess the conversation and ask its highest-impact next question."""
+    # Asking for options is a request to keep going. It has to outrank both the
+    # involvement ceiling and a completion the model calls on this same turn —
+    # otherwise the button silently ends the interview instead of answering it.
+    force = force or require_suggestions
     if session.involvement_ceiling_reached() and not force:
         session.complete = True
         session.readiness_reason = (
@@ -297,13 +310,16 @@ def next_question(session: interview.Session, force: bool = False) -> dict:
         shape = interview.choose_shape(session, ranking)
         try:
             response = MODEL.generate(
-                interview.build_prompt(session, ranking),
+                interview.build_prompt(session, ranking, require_suggestions=require_suggestions),
                 system=interview.SYSTEM,
                 json_out=True,
                 schema=interview.QUESTION_SCHEMA,
                 temperature=0.9,                # questions should not be samey
                 stub={
-                    "question": interview.fallback_question(shape),
+                    "response_kind": "question",
+                    "guidance": "",
+                    "suggestions": [],
+                    "question": interview.fallback_question(shape, session),
                     "listening_for": shape.probes,
                     "focus": shape.id,
                     "established": session.established,
@@ -317,11 +333,14 @@ def next_question(session: interview.Session, force: bool = False) -> dict:
             # Asking can continue safely without the model: every shape has a
             # hand-written, rule-compliant calibration question. Preserve the
             # chosen shape so telemetry still learns from the answer.
-            question = interview.fallback_question(shape)
+            question = interview.fallback_question(shape, session)
             turn = interview.Turn(shape.id, "dynamic", question)
             session.turns.append(turn)
             return {
                 "question": question,
+                "guidance": "",
+                "response_kind": "question",
+                "suggestions": [],
                 "listening_for": shape.probes,
                 "shape": shape.id,
                 "ranked": bool(ranking),
@@ -329,30 +348,47 @@ def next_question(session: interview.Session, force: bool = False) -> dict:
                 "note": "Vertex is temporarily busy; using a built-in question.",
             }
         try:
-            assessment = interview.parse(response.json())
+            assessment = interview.parse(
+                response.json(), session, require_suggestions=require_suggestions
+            )
         except (ValueError, TypeError) as exc:
             last_error = str(exc)
             continue
 
         session.apply_assessment(assessment)
-        if session.complete and not force:
-            return {"question": None, "focus": assessment["focus"],
-                    "listening_for": assessment["listening_for"],
-                    "ranked": bool(ranking), "interview_complete": True}
+        if session.complete:
+            if not force:
+                return {"question": None, "focus": assessment["focus"],
+                        "listening_for": assessment["listening_for"],
+                        "ranked": bool(ranking), "interview_complete": True}
+            # Continuing on request: reopen, or the saved session hides the ask
+            # panel again on the next render and the answer has nowhere to go.
+            session.complete = False
+            session.ready_streak = 0
 
         question = assessment["question"]
         if not question:  # writer explicitly requested another question
-            question = interview.fallback_question(shape)
-        turn = interview.Turn(assessment["focus"], "dynamic", question)
+            question = interview.fallback_question(shape, session)
+        turn = interview.Turn(
+            assessment["focus"], "dynamic", question,
+            guidance=assessment["guidance"],
+            response_kind=assessment["response_kind"],
+            suggestions=assessment["suggestions"],
+        )
         session.turns.append(turn)
-        return {"question": question, "listening_for": assessment["listening_for"],
+        return {"question": question, "guidance": assessment["guidance"],
+                "response_kind": assessment["response_kind"],
+                "suggestions": assessment["suggestions"],
+                "listening_for": assessment["listening_for"],
                 "focus": assessment["focus"], "ranked": bool(ranking),
                 "interview_complete": False}
 
     shape = interview.choose_shape(session, ranking)
-    question = interview.fallback_question(shape)
+    question = interview.fallback_question(shape, session)
     session.turns.append(interview.Turn(shape.id, "dynamic", question))
     return {"question": question, "listening_for": shape.probes,
+            "guidance": "", "response_kind": "question",
+            "suggestions": [],
             "focus": shape.id, "ranked": False, "degraded": True,
             "note": f"using a built-in question after invalid model output: {last_error}"}
 
@@ -361,32 +397,76 @@ def write_up(session: interview.Session) -> dict:
     """Assemble the interview into a scene outline."""
     response = MODEL.generate(
         scriptwright.build_prompt(session),
-        system=scriptwright.system_for(session),
+        system=scriptwright.SYSTEM,
         json_out=True,
         schema=scriptwright.SCENES_SCHEMA,
-        temperature=0.4,                 # assembling, not inventing
-        stub={"title": "Untitled", "logline": "", "scenes": [], "gaps": [],
-              "ai_added": []},
+        temperature=0.4,
+        stub={"title": "Untitled", "logline": "", "scenes": []},
     )
     outline = scriptwright.parse(response.json(), session)
+    session.outline_approved = False
     path_for(session.project_id + "-outline").write_text(
         json.dumps(outline.to_dict(), indent=2))
+    save(session)
     return outline.to_dict()
+
+
+def save_outline_edit(session: interview.Session, payload: dict) -> dict:
+    """Persist human edits without allowing arbitrary project-file writes."""
+    if not isinstance(payload, dict):
+        raise ValueError("outline must be an object")
+    scenes = payload.get("scenes")
+    if not isinstance(scenes, list) or not 1 <= len(scenes) <= 30:
+        raise ValueError("outline must contain between 1 and 30 scenes")
+
+    def text(value, limit: int) -> str:
+        return str(value or "").strip()[:limit]
+
+    clean_scenes = []
+    for index, scene in enumerate(scenes, 1):
+        if not isinstance(scene, dict):
+            raise ValueError("every scene must be an object")
+        who = scene.get("who") if isinstance(scene.get("who"), list) else []
+        clean_scenes.append({
+            "n": index,
+            "slug": text(scene.get("slug"), 180) or "INT. UNSPECIFIED - DAY",
+            "who": [text(person, 100) for person in who if text(person, 100)][:30],
+            "action": text(scene.get("action"), 3000),
+            "why": text(scene.get("why"), 1000),
+            "from": text(scene.get("from"), 1000),
+        })
+
+    clean = {
+        "title": text(payload.get("title"), 200) or "Untitled",
+        "logline": text(payload.get("logline"), 1200),
+        "scenes": clean_scenes,
+    }
+    path_for(session.project_id + "-outline").write_text(json.dumps(clean, indent=2))
+    session.outline_approved = False
+    save(session)
+    return clean
 
 
 def state_of(session: interview.Session, extra: dict | None = None) -> dict:
     answered = [t for t in session.turns if t.answer and not t.skipped]
     current = session.turns[-1] if session.turns else None
     ready, note = scriptwright.readiness(session)
+    outline_path = path_for(session.project_id + "-outline")
+    saved_outline = json.loads(outline_path.read_text()) if outline_path.exists() else None
     return {
         "can_write_up": ready,
         "write_up_note": note,
         "project_id": session.project_id,
         "seed": session.seed,
+        "storytelling_format": session.storytelling_format,
         "involvement": session.involvement,
         "collaboration_mode": session.collaboration_mode,
         "goal": session.readiness_reason or "Finding what this story needs next",
         "question": current.question if current and not current.answer else None,
+        "guidance": current.guidance if current and not current.answer else "",
+        "response_kind": current.response_kind if current and not current.answer else "question",
+        "suggestions": current.suggestions if current and not current.answer else [],
+        "transcript": [t.__dict__ for t in session.turns],
         "answered": len(answered),
         "words": sum(t.words for t in answered),
         "readiness": session.readiness,
@@ -394,7 +474,9 @@ def state_of(session: interview.Session, extra: dict | None = None) -> dict:
         "readiness_reason": session.readiness_reason,
         "critical_gaps": session.critical_gaps,
         "interview_complete": session.complete,
+        "outline_approved": session.outline_approved,
         "established": session.established or [{"q": t.question, "a": t.answer} for t in answered],
+        "outline": saved_outline,
         **(extra or {}),
     }
 
@@ -465,7 +547,11 @@ class Handler(SimpleHTTPRequestHandler):
                 session = interview.Session(
                     project_id=f"p_{uuid.uuid4().hex}",
                     seed=(body.get("seed") or "").strip(),
-                    involvement=max(0, min(100, int(body.get("involvement", 75)))),
+                    storytelling_format=(body.get("storytelling_format") or "not_sure")
+                        if (body.get("storytelling_format") or "not_sure") in
+                        {"narrated", "dialogue_led", "hybrid", "not_sure"}
+                        else "not_sure",
+                    involvement=max(0, min(100, int(body.get("involvement", 50)))),
                 )
                 asked = next_question(session)
                 save(session)
@@ -486,7 +572,10 @@ class Handler(SimpleHTTPRequestHandler):
                     telemetry.record(telemetry.Outcome(
                         turn.shape_id, turn.stage, session.project_id,
                         words=turn.words, seconds=seconds))
-                asked = next_question(session)
+                asked = next_question(
+                    session,
+                    require_suggestions=bool(body.get("request_suggestions", False)),
+                )
                 save(session)
                 return self._send(state_of(session, asked))
 
@@ -494,7 +583,22 @@ class Handler(SimpleHTTPRequestHandler):
                 ready, note = scriptwright.readiness(session)
                 if not ready:
                     return self._send({"error": note}, 400)
-                return self._send({**state_of(session), "outline": write_up(session)})
+                outline = write_up(session)
+                return self._send({**state_of(session), "outline": outline})
+
+            if path.endswith("/approve-outline"):
+                if not path_for(session.project_id + "-outline").exists():
+                    return self._send({"error": "Create an outline before approving it."}, 400)
+                session.outline_approved = True
+                save(session)
+                return self._send(state_of(session))
+
+            if path.endswith("/edit-outline"):
+                try:
+                    outline = save_outline_edit(session, body.get("outline"))
+                except ValueError as exc:
+                    return self._send({"error": str(exc)}, 400)
+                return self._send({**state_of(session), "outline": outline})
 
             if path.endswith("/skip"):
                 if session.turns and not session.turns[-1].answer:
