@@ -25,3 +25,13 @@ service-account*
 *.pem
 *.p12
 store/
+
+# Local databases hold the filmmaker's own story material: never commit them.
+# The path moved when the interview build came up to the project root, so this
+# is written as a shape rather than a location.
+data/
+*.db
+*.sqlite3
+*-wal
+*-shm
+*.lock
