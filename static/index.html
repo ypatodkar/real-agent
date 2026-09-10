@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A persistent Story Editor for developing a short film.">
+  <title>Second Unit — Interview</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="app-header">
+    <button class="brand" id="homeButton" type="button" aria-label="Second Unit home">
+      <span class="brand-mark">II</span>
+      <span><strong>Second Unit</strong><small>Short-film workspace</small></span>
+    </button>
+
+    <nav class="stage-line" aria-label="Film workflow">
+      <button class="stage active" id="interviewStageButton" type="button"><i>1</i>Interview</button>
+      <button class="stage" id="outlineStageButton" type="button" disabled><i>2</i>Outline</button>
+      <button class="stage" id="screenplayStageButton" type="button" disabled><i>3</i>Screenplay</button>
+      <button class="stage wide" id="breakdownStageButton" type="button" disabled><i>4</i>Breakdown</button>
+      <span class="stage wide"><i>5</i>Schedule</span>
+      <span class="stage wide"><i>6</i>Shots</span>
+      <span class="stage wide"><i>7</i>Readiness</span>
+    </nav>
+
+    <button class="header-action" id="historyButton" type="button">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h10"/></svg>
+      <span>Interviews</span>
+    </button>
+  </header>
+
+  <div class="notice" id="notice" role="status" aria-live="polite" hidden></div>
+
+  <main>
+    <section class="start-screen" id="startScreen">
+      <div class="start-copy">
+        <p class="eyebrow">Stage 01 · Story interview</p>
+        <h1>Start with the part of the film you can already see.</h1>
+        <p>The Story Editor will help you find the people, pressure, visible events, and ending—without turning every idea it offers into your decision.</p>
+        <ul class="start-promises">
+          <li><span>01</span>One clear set of story questions</li>
+          <li><span>02</span>Selectable ideas when the blank page gets heavy</li>
+          <li><span>03</span>Your exact conversation saved automatically</li>
+        </ul>
+      </div>
+
+      <form class="start-card" id="startForm">
+        <div class="card-heading">
+          <span class="status-dot"></span>
+          <span>New interview</span>
+        </div>
+
+        <label class="field-label" for="filmTitle">Working title <small>optional</small></label>
+        <input class="text-input" id="filmTitle" name="title" maxlength="160" placeholder="Untitled is completely fine">
+
+        <label class="field-label" for="seedInput">What do you know so far?</label>
+        <div class="textarea-shell large">
+          <textarea id="seedInput" name="seed" maxlength="12000" rows="6" required placeholder="A character, a moment, a problem, an image—start anywhere."></textarea>
+          <button class="mic-button" id="seedMic" type="button" aria-label="Start voice typing" aria-pressed="false" disabled>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Zm-6 9a6 6 0 0 0 12 0M12 18v3M9 21h6"/></svg>
+          </button>
+        </div>
+        <div class="speech-row"><span id="seedSpeech" aria-live="polite">Voice audio is sent to Google for transcription, then discarded.</span><button type="button" class="text-action" id="seedCancelVoice" hidden>Cancel recording</button></div>
+
+        <fieldset>
+          <legend>How might the film speak?</legend>
+          <div class="choice-grid format-grid">
+            <label><input type="radio" name="storytelling_format" value="narrated"><span><b>Narrated</b><small>A voice carries it</small></span></label>
+            <label><input type="radio" name="storytelling_format" value="dialogue_led"><span><b>Dialogue-led</b><small>Characters carry it</small></span></label>
+            <label><input type="radio" name="storytelling_format" value="hybrid"><span><b>Hybrid</b><small>Voice and scenes</small></span></label>
+            <label><input type="radio" name="storytelling_format" value="not_sure" checked><span><b>Not sure</b><small>Help me discover it</small></span></label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>How should the editor help?</legend>
+          <div class="choice-grid involvement-grid">
+            <label><input type="radio" name="involvement_mode" value="ai_led"><span><b>Take the lead</b><small>Offer directions often</small></span></label>
+            <label><input type="radio" name="involvement_mode" value="collaborative" checked><span><b>Collaborate</b><small>Balance help and questions</small></span></label>
+            <label><input type="radio" name="involvement_mode" value="author_led"><span><b>Follow me</b><small>Protect my choices</small></span></label>
+          </div>
+        </fieldset>
+
+        <button class="primary-button" id="startButton" type="submit">
+          Begin the interview <span>→</span>
+        </button>
+      </form>
+    </section>
+
+    <section class="workspace" id="workspace" hidden>
+      <div class="conversation-column">
+        <header class="project-heading">
+          <div>
+            <p class="eyebrow">Interview · <span id="projectMode">Collaborative</span></p>
+            <h1 id="projectTitle">Untitled film</h1>
+          </div>
+          <span class="save-state"><i></i> Saved locally</span>
+        </header>
+
+        <div class="timeline" id="timeline" aria-live="polite"></div>
+        <div class="working-card" id="workingCard" hidden>
+          <span class="thinking-dots"><i></i><i></i><i></i></span>
+          <span id="workingText">Considering your answer…</span>
+        </div>
+
+        <section class="response-actions" id="responseActions" hidden></section>
+
+        <form class="composer" id="composerForm">
+          <div class="composer-mode" id="composerMode" hidden>
+            <span id="composerModeText">Correcting the last response</span>
+            <button type="button" id="clearComposerMode">×</button>
+          </div>
+          <div class="textarea-shell">
+            <textarea id="composerInput" maxlength="12000" rows="3" placeholder="Answer, ask a question, correct something, or give the editor an instruction."></textarea>
+            <button class="mic-button" id="composerMic" type="button" aria-label="Start voice typing" aria-pressed="false" disabled>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Zm-6 9a6 6 0 0 0 12 0M12 18v3M9 21h6"/></svg>
+            </button>
+          </div>
+          <div class="speech-row"><span id="composerSpeech" aria-live="polite">Voice audio goes to Google for transcription and is never sent as a message automatically.</span><button type="button" class="text-action" id="composerCancelVoice" hidden>Cancel recording</button></div>
+          <div class="composer-actions">
+            <div>
+              <button class="secondary-button" id="optionsButton" type="button">Give me options</button>
+              <button class="secondary-button" id="finishInterviewButton" type="button">Finish interview →</button>
+              <button class="text-action" id="skipButton" type="button">Skip this</button>
+            </div>
+            <button class="primary-button compact" id="sendButton" type="submit">Send <span>→</span></button>
+          </div>
+        </form>
+      </div>
+
+      <aside class="story-state" aria-label="Story state">
+        <div class="state-heading">
+          <div><p class="eyebrow">Working story</p><h2>What we know</h2></div>
+          <span class="revision" id="revisionLabel">r0</span>
+        </div>
+
+        <section class="state-section readiness-section">
+          <div class="section-title"><h3>Outline readiness</h3><span id="readinessFraction">0 / 4</span></div>
+          <div class="lens-list" id="lensList"></div>
+          <p class="readiness-reason" id="readinessReason">The story has not been assessed yet.</p>
+        </section>
+
+        <section class="state-section">
+          <div class="section-title"><h3>Accepted material</h3><span id="factCount">0</span></div>
+          <ul class="state-list" id="factList"><li class="empty-state">Your accepted story details will appear here.</li></ul>
+        </section>
+
+        <section class="state-section">
+          <div class="section-title"><h3>Still open</h3><span id="gapCount">0</span></div>
+          <ul class="state-list gaps" id="gapList"><li class="empty-state">The editor will keep only outline-blocking gaps here.</li></ul>
+        </section>
+      </aside>
+    </section>
+
+    <section class="outline-workspace" id="outlineWorkspace" hidden>
+      <header class="outline-header">
+        <div>
+          <button class="outline-back text-action" id="backToInterview" type="button">← Back to Interview</button>
+          <p class="eyebrow">Stage 02 · Story outline</p>
+          <h1 id="outlineProjectTitle">Untitled film</h1>
+          <p>Your interview is safely handed off. The outline agent will shape these decisions into a scene-ready story.</p>
+        </div>
+        <div class="outline-header-actions">
+          <span class="outline-agent-status"><i></i>Structure decisions save locally</span>
+          <button class="primary-button compact" id="outlineAgentButton" type="button" disabled title="Gemini structure proposals will be connected next">Ask Outline agent</button>
+        </div>
+      </header>
+
+      <div class="outline-layout">
+        <details class="outline-source" aria-label="Interview handoff">
+          <summary>
+            <span><b>Interview source</b><small id="outlineSourceMeta">Saved decisions and open questions</small></span>
+            <span class="details-label">View handoff <i>⌄</i></span>
+          </summary>
+          <div class="outline-source-grid">
+            <section>
+              <h3>Starting idea</h3>
+              <p id="outlineSeed"></p>
+            </section>
+            <section>
+              <h3>Accepted decisions</h3>
+              <ul id="outlineFacts"></ul>
+            </section>
+            <section>
+              <h3>Carry forward</h3>
+              <ul id="outlineGaps"></ul>
+            </section>
+          </div>
+        </details>
+
+        <div class="outline-board">
+          <div class="outline-board-heading">
+            <div><p class="eyebrow">Outline foundation</p><h2>Choose the story structure</h2></div>
+            <span id="outlineRevisionLabel">Not started</span>
+          </div>
+          <div class="outline-structure-area" id="outlineStructureArea" aria-live="polite"></div>
+
+          <form class="structure-form" id="structureProposalForm" hidden>
+            <div class="structure-form-heading">
+              <div><p class="eyebrow">Choose one</p><h3>How should the story be organized?</h3></div>
+              <button class="text-action" id="cancelStructureProposal" type="button">Cancel</button>
+            </div>
+            <p class="structure-form-help">Choose the approach that feels closest. The Outline agent will do the structuring work.</p>
+            <div class="structure-choice-grid" id="structureChoiceGrid"></div>
+            <div class="custom-structure-fields" id="customStructureFields" hidden>
+              <label>
+                <span>Name your structure</span>
+                <input id="structureLabel" maxlength="100" placeholder="e.g. One night, three encounters">
+              </label>
+              <label>
+                <span>How should it work?</span>
+                <textarea id="structureRationale" maxlength="1200" rows="3" placeholder="Briefly describe your organizing idea."></textarea>
+              </label>
+              <button class="primary-button compact" id="saveStructureProposal" type="submit">Use custom structure <span>→</span></button>
+            </div>
+          </form>
+
+          <section class="outline-next-step" id="outlineNextStep" hidden>
+            <span class="outline-symbol small">✓</span>
+            <div><p class="eyebrow">Structure selected</p><h3>Ready to build the beats</h3><p>The Outline agent will turn the interview into editable proposals inside this structure.</p></div>
+            <button class="primary-button compact" id="generateBeatsButton" type="button">Generate story beats <span>→</span></button>
+          </section>
+
+          <section class="outline-beat-section" id="outlineBeatSection" hidden>
+            <div class="beat-section-heading">
+              <div><p class="eyebrow">Story progression</p><h2>Story beats</h2></div>
+              <div><span id="beatProgress"></span><button class="secondary-button" id="addBeatButton" type="button">+ Add beat</button></div>
+            </div>
+            <div class="beat-list" id="outlineBeatList"></div>
+
+            <form class="beat-form" id="beatForm" hidden>
+              <div class="structure-form-heading">
+                <div><p class="eyebrow" id="beatFormEyebrow">Your beat</p><h3 id="beatFormTitle">Add a story beat</h3></div>
+                <button class="text-action" id="cancelBeatEdit" type="button">Cancel</button>
+              </div>
+              <label><span>Beat title</span><input id="beatTitle" maxlength="160" required></label>
+              <label><span>What visibly happens?</span><textarea id="beatSummary" maxlength="2000" rows="3" required></textarea></label>
+              <label><span>What does this change or achieve?</span><textarea id="beatPurpose" maxlength="800" rows="2"></textarea></label>
+              <button class="primary-button compact" type="submit">Save beat <span>→</span></button>
+            </form>
+
+            <section class="outline-approval-panel" id="outlineApprovalPanel"></section>
+          </section>
+        </div>
+      </div>
+    </section>
+
+    <section class="screenplay-workspace" id="screenplayWorkspace" hidden>
+      <header class="outline-header">
+        <div>
+          <button class="outline-back text-action" id="backToOutline" type="button">← Back to Outline</button>
+          <p class="eyebrow">Stage 03 · Screenplay</p>
+          <h1 id="screenplayProjectTitle">Untitled film</h1>
+          <p>The approved Outline is locked source material. Choose how the film speaks, then generate editable scenes.</p>
+        </div>
+        <span class="outline-agent-status"><i></i><span id="screenplayRevisionLabel">Not started</span></span>
+      </header>
+      <div class="screenplay-layout">
+        <section id="screenplayModePanel">
+          <p class="eyebrow">Writing mode</p>
+          <h2>How should this film speak?</h2>
+          <p class="screenplay-help">Choose one approach. You do not need to decide the dialogue or narration yourself.</p>
+          <div class="screenplay-mode-grid" id="screenplayModeGrid"></div>
+        </section>
+        <section class="screenplay-generate" id="screenplayGeneratePanel" hidden>
+          <div><p class="eyebrow">Mode selected</p><h2>Ready to draft the scenes</h2><p id="screenplayGenerateStatus" aria-live="polite">The Screenplay agent will translate every accepted beat into filmable action, narration, and dialogue.</p></div>
+          <button class="primary-button" id="generateScreenplayButton" type="button">Generate screenplay <span>→</span></button>
+        </section>
+        <section class="screenplay-scenes" id="screenplayScenes" hidden>
+          <div class="beat-section-heading"><div><p class="eyebrow">First draft</p><h2>Scenes</h2></div><span id="screenplaySceneCount"></span></div>
+          <div id="screenplaySceneList"></div>
+          <form class="beat-form" id="sceneForm" hidden>
+            <div class="structure-form-heading"><div><p class="eyebrow">Edit scene</p><h3 id="sceneFormTitle">Scene</h3></div><button class="text-action" id="cancelSceneEdit" type="button">Cancel</button></div>
+            <label><span>Scene heading</span><input id="sceneHeading" maxlength="160" required></label>
+            <label><span>Action</span><textarea id="sceneAction" maxlength="5000" rows="6" required></textarea></label>
+            <label><span>Narration</span><textarea id="sceneNarration" maxlength="3000" rows="3"></textarea></label>
+            <label><span>Dialogue — one CHARACTER: line per row</span><textarea id="sceneDialogue" maxlength="8000" rows="5"></textarea></label>
+            <button class="primary-button compact" type="submit">Save scene <span>→</span></button>
+          </form>
+          <section class="outline-approval-panel" id="screenplayApprovalPanel"></section>
+        </section>
+      </div>
+    </section>
+
+    <section class="screenplay-workspace" id="breakdownWorkspace" hidden>
+      <header class="outline-header">
+        <div>
+          <button class="outline-back text-action" id="backToScreenplay" type="button">← Back to Screenplay</button>
+          <p class="eyebrow">Stage 04 · Scene breakdown</p>
+          <h1 id="breakdownProjectTitle">Untitled film</h1>
+          <p>Turn each approved scene into the practical people, places, props, effects, and logistics needed to shoot it.</p>
+        </div>
+        <span class="outline-agent-status"><i></i><span id="breakdownRevisionLabel">Not started</span></span>
+      </header>
+      <div class="screenplay-layout">
+        <section class="screenplay-generate" id="breakdownGeneratePanel">
+          <div><p class="eyebrow">Approved screenplay ready</p><h2>Extract production requirements</h2><p id="breakdownGenerateStatus" aria-live="polite">The Breakdown agent will organize requirements scene by scene for your review.</p></div>
+          <button class="primary-button" id="generateBreakdownButton" type="button">Generate breakdown <span>→</span></button>
+        </section>
+        <section class="location-scout" id="locationScoutPanel" hidden>
+          <div class="location-scout-heading"><div><p class="eyebrow">Location scout</p><h2>Find places within reach</h2><p>Choose your production base and maximum driving time. Suggestions match the Location requirements below.</p></div></div>
+          <div class="location-controls">
+            <label><span>Production base</span><div class="location-autocomplete" id="locationAutocomplete"><small>Loading Google location search…</small></div></label>
+            <label><span>Maximum drive</span><select id="locationTravelTime"><option value="15">15 minutes</option><option value="30" selected>30 minutes</option><option value="45">45 minutes</option><option value="60">60 minutes</option><option value="90">90 minutes</option><option value="120">2 hours</option></select></label>
+            <button class="primary-button compact" id="findLocationsButton" type="button" disabled>Find locations <span>→</span></button>
+          </div>
+          <p class="location-selection" id="locationBaseLabel" aria-live="polite">Select a suggested address or place as your starting point.</p>
+          <div class="location-results" id="locationResults" hidden>
+            <div class="location-map" id="locationMap" aria-label="Suggested filming locations on Google Maps"></div>
+            <div class="location-result-groups" id="locationResultGroups"></div>
+          </div>
+        </section>
+        <section class="screenplay-scenes" id="breakdownItems" hidden>
+          <div class="beat-section-heading"><div><p class="eyebrow">Production plan</p><h2>Scene requirements</h2></div><div class="breakdown-heading-actions"><span id="breakdownItemCount"></span><button class="secondary-button" id="regenerateBreakdownButton" type="button">↻ Regenerate with AI</button></div></div>
+          <div id="breakdownSceneList"></div>
+          <form class="beat-form" id="breakdownItemForm" hidden>
+            <div class="structure-form-heading"><div><p class="eyebrow">Production requirement</p><h3 id="breakdownItemFormTitle">Edit requirement</h3></div><button class="text-action" id="cancelBreakdownItemEdit" type="button">Cancel</button></div>
+            <label><span>Category</span><select id="breakdownItemCategory" required></select></label>
+            <label><span>Requirement</span><input id="breakdownItemName" maxlength="180" required></label>
+            <label><span>Practical details</span><textarea id="breakdownItemDetails" maxlength="2000" rows="3"></textarea></label>
+            <button class="primary-button compact" type="submit">Save requirement <span>→</span></button>
+          </form>
+          <section class="outline-approval-panel" id="breakdownApprovalPanel"></section>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <div class="drawer-shell" id="historyDrawer" hidden>
+    <button class="drawer-backdrop" id="historyBackdrop" type="button" aria-label="Close Interviews"></button>
+    <aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="historyTitle">
+      <header>
+        <div><p class="eyebrow">Saved locally</p><h2 id="historyTitle">Your interviews</h2></div>
+        <button class="close-button" id="closeHistory" type="button" aria-label="Close">×</button>
+      </header>
+      <button class="primary-button" id="newInterview" type="button">+ New interview</button>
+      <div class="history-list" id="historyList"></div>
+    </aside>
+  </div>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>
